@@ -27,7 +27,7 @@ fn resolve_checkpoint(args: &Args) -> Result<PathBuf, Error> {
 
 #[derive(Parser)]
 struct Args {
-    /// Path to the source video file
+    /// Path to the source video file or directory of .mp4 files
     #[arg(short, long)]
     source: PathBuf,
 
@@ -40,8 +40,6 @@ fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("error,video_inference=trace"))
         .init();
-
-    video_rs::init().unwrap();
 
     let args = Args::parse();
     let checkpoint = resolve_checkpoint(&args)?;

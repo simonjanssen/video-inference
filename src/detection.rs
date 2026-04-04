@@ -162,7 +162,7 @@ pub(crate) fn extract_bboxes(
     session_outputs: SessionOutputs<'_>,
     config: &Config,
 ) -> Result<Vec<BoundingBox>, Error> {
-    let output = session_outputs["output0"].try_extract_array::<f32>()?;
+    let output = session_outputs[config.output_tensor_name.as_ref()].try_extract_array::<f32>()?;
     let view_candidates = output.slice(s![0, 4.., ..]);
     let mask_candidates: Vec<bool> = view_candidates
         .axis_iter(Axis(1))

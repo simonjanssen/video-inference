@@ -1,25 +1,38 @@
 use anyhow::Error;
 use fast_image_resize as fr;
 use std::path::Path;
+use std::sync::Once;
 use std::time;
 use tracing::debug;
 use video_rs::decode::Decoder;
 
-mod detection;
+pub mod detection;
 mod inference;
 mod loaders;
 
 use inference::detect_frame;
 
-use crate::inference::{detect_input_shape, load_session};
+use crate::{
+    detection::BoundingBox,
+    inference::{detect_input_shape, load_session},
+};
 
-const ONNX_INPUT_TENSOR_NAME: &str = "images";
+static INIT_VIDEO_RS: Once = Once::new();
+
+fn init_video_rs() {
+    INIT_VIDEO_RS.call_once(|| {
+        video_rs::init().expect("failed to initialize video-rs (FFmpeg)");
+    });
+}
 
 #[derive(Debug)]
 pub struct DetectionConfig {
     pub conf_thres: f32,
     pub iou_thres: f32,
     pub max_detect: usize,
+    pub input_tensor_name: String,
+    pub output_tensor_name: String,
+    //pub rate_sec: Option<f32>,
 }
 
 impl Default for DetectionConfig {
@@ -28,6 +41,9 @@ impl Default for DetectionConfig {
             conf_thres: 0.25,
             iou_thres: 0.4,
             max_detect: 300,
+            input_tensor_name: "images".to_string(),
+            output_tensor_name: "output0".to_string(),
+            //rate_sec: None,
         }
     }
 }
@@ -41,6 +57,7 @@ pub(crate) struct Config {
     pub input_height: u32,
     pub target_width: u32,
     pub target_height: u32,
+    pub output_tensor_name: String,
 }
 
 /// Decode a video file and run per-frame inference.
@@ -62,22 +79,24 @@ pub fn detect_video(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
-) -> Result<(), Error> {
-    println!("hi");
+) -> Result<Vec<Vec<BoundingBox>>, Error> {
+    init_video_rs();
     let path_video = path_video.as_ref();
     let video_name = path_video.file_name().unwrap().to_str().unwrap();
     //let t = time::Instant::now();
     let mut session = load_session(path_onnx)?;
-    let (input_width, input_height) = detect_input_shape(&session, ONNX_INPUT_TENSOR_NAME)?;
+    let (input_width, input_height) = detect_input_shape(&session, &config.input_tensor_name)?;
 
     let mut decoder = Decoder::new(path_video.to_owned())?;
     let (target_width, target_height) = decoder.size();
     let n_frames = decoder.frames()?;
+    //let duration = decoder.duration()?.as_secs();
 
-    let resolved = Config {
+    let inner_config = Config {
         conf_thres: config.conf_thres,
         iou_thres: config.iou_thres,
         max_detect: config.max_detect,
+        output_tensor_name: config.output_tensor_name.clone(),
         input_height,
         input_width,
         target_height,
@@ -87,24 +106,31 @@ pub fn detect_video(
 
     let mut resizer = fr::Resizer::new();
 
-    debug!("{:?}", resolved);
+    //debug!("{:?}", resolved);
 
     let mut dst_image = fr::images::Image::new(
-        resolved.input_width,
-        resolved.input_height,
+        inner_config.input_width,
+        inner_config.input_height,
         fr::PixelType::U8x3,
     );
 
+    let mut bboxes = Vec::with_capacity(n_frames as usize);
     let t = time::Instant::now();
     for (f, next_frame) in decoder.decode_iter().enumerate() {
         if let Ok((_ts, frame)) = next_frame {
             debug!("{}/{}", f, n_frames);
-            let _bboxes =
-                detect_frame(&mut session, frame, &resolved, &mut resizer, &mut dst_image)?;
+            let bboxes_frame = detect_frame(
+                &mut session,
+                frame,
+                &inner_config,
+                &mut resizer,
+                &mut dst_image,
+            )?;
+            bboxes.push(bboxes_frame);
         } else {
             break;
         }
     }
     debug!("{}: {:?}", video_name, t.elapsed());
-    Ok(())
+    Ok(bboxes)
 }
