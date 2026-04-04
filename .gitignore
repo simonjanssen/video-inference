@@ -1,5 +1,6 @@
 /target
 /data
+/__deprecated
 /.copilot
 *env*
 *ENV*
