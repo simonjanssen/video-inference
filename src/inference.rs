@@ -13,21 +13,21 @@ use crate::detection::{BoundingBox, extract_bboxes};
 use crate::loaders::load_resized_tensor;
 
 pub fn load_session(path_onnx: impl AsRef<Path>) -> Result<Session, Error> {
-    let builder = Session::builder()?
+    let mut builder = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .unwrap()
         .with_intra_threads(4)
         .unwrap();
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    let mut builder = {
+    {
         use ort::ep::CoreML;
-        builder
+        builder = builder
             .with_execution_providers([CoreML::default()
                 .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
                 .build()])
-            .unwrap()
-    };
+            .unwrap();
+    }
 
     let session = builder.commit_from_file(path_onnx)?;
     Ok(session)
