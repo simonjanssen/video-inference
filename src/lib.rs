@@ -11,38 +11,36 @@ mod loaders;
 
 use inference::detect_frame;
 
-use crate::inference::load_session;
+use crate::inference::{detect_input_shape, load_session};
+
+const ONNX_INPUT_TENSOR_NAME: &str = "images";
 
 #[derive(Debug)]
-pub struct Config {
-    // confidence threshold for detections
-    conf_thres: f32,
-    // intersection-over-unition threshold for non-maxima supression
-    iou_thres: f32,
-    // maximum number of detections per image
-    max_detect: usize,
-    // onnx-model input width
-    input_width: u32,
-    // onnx-model input height
-    input_height: u32,
-    // image/video-frame width
-    target_width: u32,
-    // image/video-frame height
-    target_height: u32,
+pub struct DetectionConfig {
+    pub conf_thres: f32,
+    pub iou_thres: f32,
+    pub max_detect: usize,
 }
 
-impl Default for Config {
+impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
             conf_thres: 0.25,
             iou_thres: 0.4,
             max_detect: 300,
-            input_width: 640,
-            input_height: 640,
-            target_width: 640,
-            target_height: 640,
         }
     }
+}
+
+#[derive(Debug)]
+pub(crate) struct Config {
+    pub conf_thres: f32,
+    pub iou_thres: f32,
+    pub max_detect: usize,
+    pub input_width: u32,
+    pub input_height: u32,
+    pub target_width: u32,
+    pub target_height: u32,
 }
 
 /// Decode a video file and run per-frame inference.
@@ -63,33 +61,46 @@ impl Default for Config {
 pub fn detect_video(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
+    config: &DetectionConfig,
 ) -> Result<(), Error> {
     println!("hi");
     let path_video = path_video.as_ref();
     let video_name = path_video.file_name().unwrap().to_str().unwrap();
     //let t = time::Instant::now();
     let mut session = load_session(path_onnx)?;
+    let (input_width, input_height) = detect_input_shape(&session, ONNX_INPUT_TENSOR_NAME)?;
 
     let mut decoder = Decoder::new(path_video.to_owned())?;
     let (target_width, target_height) = decoder.size();
     let n_frames = decoder.frames()?;
 
-    let mut resizer = fr::Resizer::new();
-    let config = Config {
-        target_width,
+    let resolved = Config {
+        conf_thres: config.conf_thres,
+        iou_thres: config.iou_thres,
+        max_detect: config.max_detect,
+        input_height,
+        input_width,
         target_height,
-        ..Default::default()
+        target_width,
     };
     debug!("{:?}", config);
 
-    let mut dst_image =
-        fr::images::Image::new(config.input_width, config.input_height, fr::PixelType::U8x3);
+    let mut resizer = fr::Resizer::new();
+
+    debug!("{:?}", resolved);
+
+    let mut dst_image = fr::images::Image::new(
+        resolved.input_width,
+        resolved.input_height,
+        fr::PixelType::U8x3,
+    );
 
     let t = time::Instant::now();
     for (f, next_frame) in decoder.decode_iter().enumerate() {
         if let Ok((_ts, frame)) = next_frame {
             debug!("{}/{}", f, n_frames);
-            let _bboxes = detect_frame(&mut session, frame, &config, &mut resizer, &mut dst_image)?;
+            let _bboxes =
+                detect_frame(&mut session, frame, &resolved, &mut resizer, &mut dst_image)?;
         } else {
             break;
         }

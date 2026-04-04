@@ -1,8 +1,7 @@
-use anyhow::Error;
+use anyhow::{Error, bail};
 use fast_image_resize as fr;
 use ndarray::Array3;
 use ort::{
-    ep::CoreML,
     inputs,
     session::{Session, builder::GraphOptimizationLevel},
 };
@@ -14,36 +13,43 @@ use crate::detection::{BoundingBox, extract_bboxes};
 use crate::loaders::load_resized_tensor;
 
 pub fn load_session(path_onnx: impl AsRef<Path>) -> Result<Session, Error> {
-    let session = Session::builder()?
+    let builder = Session::builder()?
         .with_optimization_level(GraphOptimizationLevel::Level3)
         .unwrap()
         .with_intra_threads(4)
-        .unwrap()
-        .with_execution_providers([CoreML::default()
-            .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
-            .build()])
-        .unwrap()
-        .commit_from_file(path_onnx)?;
-    //let _shape = determine_input_shape(&session, "inputs0")?;
+        .unwrap();
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    let mut builder = {
+        use ort::ep::CoreML;
+        builder
+            .with_execution_providers([CoreML::default()
+                .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
+                .build()])
+            .unwrap()
+    };
+
+    let session = builder.commit_from_file(path_onnx)?;
     Ok(session)
 }
 
-// fn determine_input_shape(session: &Session, input_name: &str) -> Result<(u32, u32), Error> {
-//     let inputs = session.inputs();
-//     debug!("{:?}", inputs);
-//     for input in inputs {
-//         if input.name() == input_name
-//             && let Some(dims) = input.dtype().tensor_shape()
-//         {
-//             let d = dims.len();
-//             if d > 1 {
-//                 let (w, h) = (dims[d - 2], dims[d - 1]);
-//                 return Ok((w as u32, h as u32));
-//             }
-//         }
-//     }
-//     Err(anyhow!("Failed to determine input shape!"))
-// }
+pub(crate) fn detect_input_shape(session: &Session, input_name: &str) -> Result<(u32, u32), Error> {
+    let inputs = session.inputs();
+    for input in inputs {
+        debug!("{:?}", input);
+        if input.name() == input_name
+            && let Some(dims) = input.dtype().tensor_shape()
+        {
+            let d = dims.len();
+            if d > 1 {
+                let (w, h) = (dims[d - 2], dims[d - 1]);
+                debug!("onnx model has image input shape {} x {}", w, h);
+                return Ok((w as u32, h as u32));
+            }
+        }
+    }
+    bail!("Failed to determine input shape!")
+}
 
 pub(crate) fn detect_frame(
     session: &mut Session,

@@ -3,7 +3,7 @@ use clap::Parser;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::path::PathBuf;
 use tracing_subscriber::EnvFilter;
-use video_inference::detect_video;
+use video_inference::{DetectionConfig, detect_video};
 
 fn resolve_checkpoint(args: &Args) -> Result<PathBuf, Error> {
     let path = match &args.checkpoint {
@@ -45,6 +45,7 @@ fn main() -> Result<(), Error> {
 
     let args = Args::parse();
     let checkpoint = resolve_checkpoint(&args)?;
+    let config = DetectionConfig::default();
     let path_source = args.source;
     let paths_mp4s: Vec<PathBuf> = if path_source.is_dir() {
         std::fs::read_dir(&path_source)?
@@ -58,9 +59,9 @@ fn main() -> Result<(), Error> {
     } else {
         return Err(anyhow!("Source must be a directory or an .mp4 file"));
     };
-    let _results: Vec<_> = paths_mp4s
+    paths_mp4s
         .par_iter()
-        .map(|path_mp4| detect_video(path_mp4, &checkpoint))
-        .collect();
+        .map(|path_mp4| detect_video(path_mp4, &checkpoint, &config))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(())
 }
