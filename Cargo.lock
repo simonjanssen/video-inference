@@ -2626,6 +2626,7 @@ dependencies = [
  "clap",
  "dotenvy",
  "fast_image_resize",
+ "ffmpeg-next",
  "image",
  "imageproc",
  "ndarray",
