@@ -8,6 +8,7 @@ use ort::{
     session::{Session, builder::GraphOptimizationLevel},
     value::{Tensor, TensorValueType, Value},
 };
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
 use std::{path::PathBuf, time};
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
@@ -186,7 +187,22 @@ fn main() -> Result<(), Error> {
 
     let args = Args::parse();
     let checkpoint = resolve_checkpoint(&args)?;
-    run_video(&args.source, &checkpoint)?;
-
+    let path_source = args.source;
+    let paths_mp4s: Vec<PathBuf> = if path_source.is_dir() {
+        std::fs::read_dir(&path_source)?
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                (path.extension()?.to_str()? == "mp4").then_some(path)
+            })
+            .collect()
+    } else if path_source.extension().and_then(|e| e.to_str()) == Some("mp4") {
+        vec![path_source]
+    } else {
+        return Err(anyhow!("Source must be a directory or an .mp4 file"));
+    };
+    let _results: Vec<_> = paths_mp4s
+        .par_iter()
+        .map(|path_mp4| run_video(path_mp4, &checkpoint))
+        .collect();
     Ok(())
 }
