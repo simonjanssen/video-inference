@@ -3,3 +3,4 @@
 /.copilot
 *env*
 *ENV*
+.DS_Store
