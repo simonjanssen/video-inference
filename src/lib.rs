@@ -25,12 +25,37 @@ fn init_video_rs() {
     });
 }
 
+
+/// All configuration options for `detect_video` bundled in one struct.
+/// 
+/// # Examples
+/// 
+/// Go with the default settings:
+/// ```
+/// let config = DetectionConfig::default();
+/// ```
+/// 
+/// Specify a confidence threshold other than default:
+/// ```
+/// let config = DetectionConfig { conf_thres: 0.5, ..Default::default() };
+/// ```
 #[derive(Debug)]
 pub struct DetectionConfig {
+    /// Confidence threshold for detections:
+    /// - Choose between 0.0 and 1.0
+    /// - Higher is more restrictive
     pub conf_thres: f32,
+
+    /// Intersection-Over-Union: filter out overlapping detections
     pub iou_thres: f32,
+
+    /// Maximum number of detections per frame
     pub max_detect: usize,
+
+    /// ONNX-model image input tensor name
     pub input_tensor_name: String,
+
+    /// ONNX-model results output tensor name
     pub output_tensor_name: String,
     //pub rate_sec: Option<f32>,
 }
