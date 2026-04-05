@@ -1,13 +1,12 @@
 use anyhow::{Error, anyhow};
 use fast_image_resize::{self as fr, Resizer};
+use ndarray::Array3;
 use ort::session::Session;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::time;
 use tracing::debug;
 use video_rs::decode::Decoder;
-
-//use inference::detect_frame;
 
 use crate::DetectionConfig;
 use crate::detection::detect_frame;
@@ -127,7 +126,10 @@ impl Runtime {
     ///
     /// Pre-allocates the `fast_image_resize` Resizer and destination image buffer outside the
     /// frame loop so they are reused across frames (see [`load_resized_tensor`]).
-    pub fn detect_video(&mut self) -> Result<Vec<Vec<BoundingBox>>, Error> {
+    fn run_video<F>(&mut self, mut on_detected: F) -> Result<Vec<Vec<BoundingBox>>, Error>
+    where
+        F: FnMut(&Array3<u8>, &[BoundingBox], video_rs::Time) -> Result<(), Error>,
+    {
         let mut dst_image = fr::images::Image::new(
             self.config.input_tensor_width,
             self.config.input_tensor_height,
@@ -136,16 +138,17 @@ impl Runtime {
         let mut bboxes = Vec::with_capacity(self.capacity());
         let t = time::Instant::now();
         for (f, next_frame) in self.decoder.decode_iter().enumerate() {
-            if let Ok((_ts, frame)) = next_frame {
+            if let Ok((ts, frame)) = next_frame {
                 if f % self.interval_frames == 0 {
                     debug!("{}/{}", f, self.n_frames);
                     let bboxes_frame = detect_frame(
-                        frame,
+                        &frame,
                         &self.config,
                         &mut self.session,
                         &mut self.resizer,
                         &mut dst_image,
                     )?;
+                    on_detected(&frame, &bboxes_frame, ts)?;
                     bboxes.push(bboxes_frame);
                 }
             } else {
@@ -156,40 +159,21 @@ impl Runtime {
         Ok(bboxes)
     }
 
+    pub fn detect_video(&mut self) -> Result<Vec<Vec<BoundingBox>>, Error> {
+        self.run_video(|_, _, _| Ok(()))
+    }
+
     #[cfg(feature = "visualize")]
     pub fn annotate_video(&mut self) -> Result<Vec<Vec<BoundingBox>>, Error> {
         use crate::vizualize::draw_bboxes_arr;
-        let mut dst_image = fr::images::Image::new(
-            self.config.input_tensor_width,
-            self.config.input_tensor_height,
-            fr::PixelType::U8x3,
-        );
-        let mut bboxes = Vec::with_capacity(self.capacity());
         let mut encoder = self.as_encoder()?;
-        let t = time::Instant::now();
-        for (f, next_frame) in self.decoder.decode_iter().enumerate() {
-            if let Ok((ts, frame)) = next_frame {
-                if f % self.interval_frames == 0 {
-                    debug!("{}/{}", f, self.n_frames);
-                    let frame_copy = frame.clone();
-                    let bboxes_frame = detect_frame(
-                        frame,
-                        &self.config,
-                        &mut self.session,
-                        &mut self.resizer,
-                        &mut dst_image,
-                    )?;
-                    let annotated_arr3 = draw_bboxes_arr(frame_copy, &bboxes_frame)?;
-                    encoder.encode(&annotated_arr3, ts)?;
-                    bboxes.push(bboxes_frame);
-                }
-            } else {
-                break;
-            }
-        }
+        let results = self.run_video(|frame, bboxes, ts| {
+            let annotated = draw_bboxes_arr(frame.clone(), bboxes)?;
+            encoder.encode(&annotated, ts)?;
+            Ok(())
+        })?;
         encoder.finish()?;
-        debug!("detect video: {:?}", t.elapsed());
-        Ok(bboxes)
+        Ok(results)
     }
 }
 

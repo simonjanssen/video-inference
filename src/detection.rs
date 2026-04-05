@@ -163,7 +163,7 @@ pub fn nms(boxes: &[BoundingBox], iou_threshold: f32) -> Vec<BoundingBox> {
 }
 
 pub(crate) fn detect_frame(
-    frame: Array3<u8>,
+    frame: &Array3<u8>,
     config: &RuntimeConfig,
     session: &mut Session,
     resizer: &mut Resizer,

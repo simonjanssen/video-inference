@@ -17,7 +17,7 @@ use crate::runtime::RuntimeConfig;
 ///   eliminating an intermediate f32 HWC buffer and the non-contiguous copy that
 ///   `ndarray::permuted_axes` + `Tensor::from_array` would otherwise require.
 pub(crate) fn load_resized_tensor(
-    img_arr: Array3<u8>,
+    img_arr: &Array3<u8>,
     config: &RuntimeConfig,
     resizer: &mut fr::Resizer,
     dst_image: &mut fr::images::Image,
