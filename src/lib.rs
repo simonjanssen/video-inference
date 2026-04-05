@@ -9,6 +9,8 @@ use video_rs::decode::Decoder;
 pub mod detection;
 mod inference;
 mod loaders;
+#[cfg(feature = "visualize")]
+mod vizualize;
 
 use inference::detect_frame;
 
@@ -56,6 +58,9 @@ pub struct DetectionConfig {
     /// - Defaults to None (run detection on all frames)
     pub interval: Option<f32>,
 
+    /// Annotated video output path (requires `visualize` feature flag)
+    pub output: Option<String>,
+
     /// ONNX-model image input tensor name
     pub input_tensor_name: String,
 
@@ -71,6 +76,7 @@ impl Default for DetectionConfig {
             iou_thres: 0.4,
             max_detect: 300,
             interval: None,
+            output: None,
             input_tensor_name: "images".to_string(),
             output_tensor_name: "output0".to_string(),
             //rate_sec: None,
@@ -164,11 +170,29 @@ pub fn detect_video(
         n_frames as usize
     };
     let mut bboxes = Vec::with_capacity(capacity);
+    #[cfg(feature = "visualize")]
+    let path_output = match &config.output {
+        Some(p) => std::path::PathBuf::from(p),
+        None => {
+            let stem = path_video.file_stem().unwrap().to_str().unwrap();
+            let ext = path_video.extension().unwrap().to_str().unwrap();
+            path_video.with_file_name(format!("{stem}_ann.{ext}"))
+        }
+    };
+    #[cfg(feature = "visualize")]
+    let settings = {
+        use video_rs::encode::Settings;
+        Settings::preset_h264_yuv420p(target_width as usize, target_height as usize, false)
+    };
+    #[cfg(feature = "visualize")]
+    let mut encoder = video_rs::encode::Encoder::new(&*path_output, settings)?;
     let t = time::Instant::now();
     for (f, next_frame) in decoder.decode_iter().enumerate() {
-        if let Ok((_ts, frame)) = next_frame {
+        if let Ok((ts, frame)) = next_frame {
             if f % interval_frames == 0 {
                 debug!("{}/{}", f, n_frames);
+                #[cfg(feature = "visualize")]
+                let frame_copy = frame.clone();
                 let bboxes_frame = detect_frame(
                     &mut session,
                     frame,
@@ -176,6 +200,13 @@ pub fn detect_video(
                     &mut resizer,
                     &mut dst_image,
                 )?;
+                #[cfg(feature = "visualize")]
+                {
+                    use crate::vizualize::draw_bboxes_arr;
+                    let annotated_arr3 = draw_bboxes_arr(frame_copy, &bboxes_frame)?;
+                    encoder.encode(&annotated_arr3, ts)?;
+                    //annotated.save(format!("./tmp/{f:03}.jpg"))?;
+                }
                 bboxes.push(bboxes_frame);
             }
         } else {
@@ -183,5 +214,22 @@ pub fn detect_video(
         }
     }
     debug!("{}: {:?}", video_name, t.elapsed());
+    #[cfg(feature = "visualize")]
+    encoder.finish()?;
     Ok(bboxes)
+}
+
+/// Debug fn to check decoding speed
+pub fn iterate_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
+    let mut decoder = Decoder::new(path_video.as_ref())?;
+    let t = time::Instant::now();
+    for next_frame in decoder.decode_iter() {
+        if let Ok((ts, frame)) = next_frame {
+            debug!("{} | {:?}", ts, frame.shape());
+        } else {
+            break;
+        }
+    }
+    debug!("iterate: {:?}", t.elapsed());
+    Ok(())
 }

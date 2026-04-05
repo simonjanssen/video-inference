@@ -43,7 +43,10 @@ fn main() -> Result<(), Error> {
 
     let args = Args::parse();
     let checkpoint = resolve_checkpoint(&args)?;
-    let config = DetectionConfig::default();
+    let config = DetectionConfig {
+        interval: Some(1.0),
+        ..Default::default()
+    };
     let path_source = args.source;
     let paths_mp4s: Vec<PathBuf> = if path_source.is_dir() {
         std::fs::read_dir(&path_source)?

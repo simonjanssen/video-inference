@@ -25,20 +25,20 @@ pub struct BoundingBox {
 
 impl BoundingBox {
     // center-x, center-y, width, height
-    // pub fn xywh(&self) -> (u32, u32, u32, u32) {
-    //     let w = self.x2 - self.x1;
-    //     let h = self.y2 - self.y1;
-    //     let x = (self.x2 + self.x1) / 2.0;
-    //     let y = (self.y2 + self.y1) / 2.0;
-    //     (x as u32, y as u32, w as u32, h as u32)
-    // }
+    pub fn xywh(&self) -> (u32, u32, u32, u32) {
+        let w = self.x2 - self.x1;
+        let h = self.y2 - self.y1;
+        let x = (self.x2 + self.x1) / 2.0;
+        let y = (self.y2 + self.y1) / 2.0;
+        (x as u32, y as u32, w as u32, h as u32)
+    }
 
     // left, top, width, height
-    // pub fn x1y1wh(&self) -> (u32, u32, u32, u32) {
-    //     let w = self.x2 - self.x1;
-    //     let h = self.y2 - self.y1;
-    //     (self.x1 as u32, self.y1 as u32, w as u32, h as u32)
-    // }
+    pub fn x1y1wh(&self) -> (u32, u32, u32, u32) {
+        let w = self.x2 - self.x1;
+        let h = self.y2 - self.y1;
+        (self.x1 as u32, self.y1 as u32, w as u32, h as u32)
+    }
 
     pub fn area(&self) -> f32 {
         let w = self.x2 - self.x1;
