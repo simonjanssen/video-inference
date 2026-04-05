@@ -3,7 +3,7 @@ use fast_image_resize as fr;
 use ndarray::Array3;
 use ort::value::{Tensor, TensorValueType, Value};
 
-use crate::Config;
+use crate::runtime::RuntimeConfig;
 
 /// Resize a decoded video frame and produce a normalized NCHW f32 tensor for inference.
 ///
@@ -18,7 +18,7 @@ use crate::Config;
 ///   `ndarray::permuted_axes` + `Tensor::from_array` would otherwise require.
 pub(crate) fn load_resized_tensor(
     img_arr: Array3<u8>,
-    config: &Config,
+    config: &RuntimeConfig,
     resizer: &mut fr::Resizer,
     dst_image: &mut fr::images::Image,
 ) -> Result<Value<TensorValueType<f32>>, Error> {
@@ -36,7 +36,7 @@ pub(crate) fn load_resized_tensor(
 
     // Single-pass: normalize u8→f32 and transpose HWC→CHW
     let src = dst_image.buffer();
-    let pixels = (config.input_width * config.input_height) as usize;
+    let pixels = (config.input_tensor_height * config.input_tensor_width) as usize;
     let mut chw = vec![0.0f32; 3 * pixels];
     for i in 0..pixels {
         chw[i] = src[i * 3] as f32 / 255.0;
@@ -48,8 +48,8 @@ pub(crate) fn load_resized_tensor(
         (
             1,
             3,
-            config.input_height as usize,
-            config.input_width as usize,
+            config.input_tensor_height as usize,
+            config.input_tensor_width as usize,
         ),
         chw,
     )?;

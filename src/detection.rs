@@ -1,9 +1,13 @@
+use crate::{loaders::load_resized_tensor, runtime::RuntimeConfig};
 use anyhow::Error;
-use ndarray::{ArrayView1, Axis, s};
-use ort::session::SessionOutputs;
-use std::cmp::Ordering;
-
-use crate::Config;
+use fast_image_resize::{self as fr, Resizer};
+use ndarray::{Array3, ArrayView1, Axis, s};
+use ort::{
+    inputs,
+    session::{Session, SessionOutputs},
+};
+use std::{cmp::Ordering, time};
+use tracing::debug;
 
 fn xywh_to_xyxy(x: &f32, y: &f32, w: &f32, h: &f32) -> (f32, f32, f32, f32) {
     let x1 = x - w / 2.0;
@@ -158,9 +162,38 @@ pub fn nms(boxes: &[BoundingBox], iou_threshold: f32) -> Vec<BoundingBox> {
     kept_boxes
 }
 
+pub(crate) fn detect_frame(
+    frame: Array3<u8>,
+    config: &RuntimeConfig,
+    session: &mut Session,
+    resizer: &mut Resizer,
+    dst_image: &mut fr::images::Image,
+) -> Result<Vec<BoundingBox>, Error> {
+    let t = time::Instant::now();
+    let image_tensor = load_resized_tensor(frame, config, resizer, dst_image)?;
+    let session_inputs = inputs! {
+        "images" => image_tensor
+    };
+    let dt_preprocess = t.elapsed();
+    let t = time::Instant::now();
+    let session_outputs = session.run(session_inputs)?;
+    let dt_inference = t.elapsed();
+    let t = time::Instant::now();
+    let bboxes = extract_bboxes(session_outputs, config)?;
+    let dt_postprocess = t.elapsed();
+
+    let class_idxs: Vec<_> = bboxes.iter().map(|b| b.class_idx).collect();
+    debug!(
+        "pre={:.1?} inf={:.1?} post={:.1?} classes={:?}",
+        dt_preprocess, dt_inference, dt_postprocess, class_idxs
+    );
+
+    Ok(bboxes)
+}
+
 pub(crate) fn extract_bboxes(
     session_outputs: SessionOutputs<'_>,
-    config: &Config,
+    config: &RuntimeConfig,
 ) -> Result<Vec<BoundingBox>, Error> {
     let output = session_outputs[config.output_tensor_name.as_ref()].try_extract_array::<f32>()?;
     let view_candidates = output.slice(s![0, 4.., ..]);
@@ -185,7 +218,10 @@ pub(crate) fn extract_bboxes(
     let mut bboxes = nms(&bboxes, config.iou_thres);
     bboxes.truncate(config.max_detect); // keep only max detections
 
-    let (base_w, base_h) = (config.input_width as f32, config.input_height as f32);
+    let (base_w, base_h) = (
+        config.input_tensor_width as f32,
+        config.input_tensor_height as f32,
+    );
     let (target_w, target_h) = (config.target_width as f32, config.target_height as f32);
     let scale_w = target_w / base_w;
     let scale_h = target_h / base_h;
