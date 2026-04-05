@@ -25,16 +25,15 @@ fn init_video_rs() {
     });
 }
 
-
 /// All configuration options for `detect_video` bundled in one struct.
-/// 
+///
 /// # Examples
-/// 
+///
 /// Go with the default settings:
 /// ```
 /// let config = DetectionConfig::default();
 /// ```
-/// 
+///
 /// Specify a confidence threshold other than default:
 /// ```
 /// let config = DetectionConfig { conf_thres: 0.5, ..Default::default() };
@@ -52,6 +51,11 @@ pub struct DetectionConfig {
     /// Maximum number of detections per frame
     pub max_detect: usize,
 
+    /// Detection Interval
+    /// - Run detection every ..th second
+    /// - Defaults to None (run detection on all frames)
+    pub interval: Option<f32>,
+
     /// ONNX-model image input tensor name
     pub input_tensor_name: String,
 
@@ -66,6 +70,7 @@ impl Default for DetectionConfig {
             conf_thres: 0.25,
             iou_thres: 0.4,
             max_detect: 300,
+            interval: None,
             input_tensor_name: "images".to_string(),
             output_tensor_name: "output0".to_string(),
             //rate_sec: None,
@@ -115,7 +120,21 @@ pub fn detect_video(
     let mut decoder = Decoder::new(path_video.to_owned())?;
     let (target_width, target_height) = decoder.size();
     let n_frames = decoder.frames()?;
-    //let duration = decoder.duration()?.as_secs();
+
+    let interval_frames = match config.interval {
+        Some(interval_sec) => {
+            let duration_sec = decoder.duration()?.as_secs();
+            if duration_sec > 0.0 && n_frames > 0 {
+                ((n_frames as f32 / duration_sec) * interval_sec)
+                    .round()
+                    .max(1.0) as usize
+            } else {
+                1
+            }
+        }
+        None => 1,
+    };
+    debug!("running detection every {}th frame", interval_frames);
 
     let inner_config = Config {
         conf_thres: config.conf_thres,
@@ -139,19 +158,26 @@ pub fn detect_video(
         fr::PixelType::U8x3,
     );
 
-    let mut bboxes = Vec::with_capacity(n_frames as usize);
+    let capacity = if interval_frames > 1 {
+        n_frames as usize / interval_frames + 1
+    } else {
+        n_frames as usize
+    };
+    let mut bboxes = Vec::with_capacity(capacity);
     let t = time::Instant::now();
     for (f, next_frame) in decoder.decode_iter().enumerate() {
         if let Ok((_ts, frame)) = next_frame {
-            debug!("{}/{}", f, n_frames);
-            let bboxes_frame = detect_frame(
-                &mut session,
-                frame,
-                &inner_config,
-                &mut resizer,
-                &mut dst_image,
-            )?;
-            bboxes.push(bboxes_frame);
+            if f % interval_frames == 0 {
+                debug!("{}/{}", f, n_frames);
+                let bboxes_frame = detect_frame(
+                    &mut session,
+                    frame,
+                    &inner_config,
+                    &mut resizer,
+                    &mut dst_image,
+                )?;
+                bboxes.push(bboxes_frame);
+            }
         } else {
             break;
         }

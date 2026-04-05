@@ -1,13 +1,17 @@
 use anyhow::Error;
-use video_inference::{detect_video, DetectionConfig};
-use tracing_subscriber::EnvFilter;
 use tracing::info;
+use tracing_subscriber::EnvFilter;
+use video_inference::{DetectionConfig, detect_video};
 
 fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("error,video_inference=trace"))
         .init();
-    let config = DetectionConfig::default();
+    // run detections in 1s intervals
+    let config = DetectionConfig {
+        interval: Some(1.0),
+        ..Default::default()
+    };
     let path_video = "./tests/assets/video.mp4";
     let path_onnx = "./tests/assets/model.onnx";
     let bboxes = detect_video(path_video, path_onnx, &config)?;
