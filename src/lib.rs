@@ -1,12 +1,14 @@
-use anyhow::Error;
+use anyhow::{Error, anyhow};
 use std::path::{Path, PathBuf};
-use std::time;
+use std::sync::mpsc::sync_channel;
+use std::{thread, time};
 use tracing::debug;
 use video_rs::decode::Decoder;
 
 pub mod detection;
 mod inference;
 mod loaders;
+mod parallel;
 mod runtime;
 #[cfg(feature = "visualize")]
 mod vizualize;
@@ -14,7 +16,8 @@ mod vizualize;
 //use inference::detect_frame;
 
 use crate::detection::BoundingBox;
-use crate::runtime::RuntimeBuilder;
+use crate::parallel::{DetectionTask, detection_handler};
+use crate::runtime::{RuntimeBuilder, calc_interval_frames, init_video_rs};
 
 /// All configuration options for `detect_video` bundled in one struct.
 ///
@@ -31,7 +34,7 @@ use crate::runtime::RuntimeBuilder;
 /// use video_inference::DetectionConfig;
 /// let config = DetectionConfig { conf_thres: 0.5, ..Default::default() };
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DetectionConfig {
     /// Confidence threshold for detections:
     /// - Choose between 0.0 and 1.0
@@ -73,6 +76,16 @@ impl Default for DetectionConfig {
     }
 }
 
+/// Run video-detection on mp4-video
+///
+/// # Example
+/// ```
+/// use video_inference::{DetectionConfig, detect_video};
+/// let config = DetectionConfig {interval: Some(1.0), ..Default::default()};
+/// let path_video = "./tests/assets/video.mp4";
+/// let path_onnx = "./tests/assets/model.onnx";
+/// let bboxes = detect_video(path_video, path_onnx, &config)?;
+/// ```
 pub fn detect_video(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
@@ -86,6 +99,7 @@ pub fn detect_video(
     Ok(results)
 }
 
+/// Run video-detection and write back detections as video with bounding boxes
 #[cfg(feature = "visualize")]
 pub fn annotate_video(
     path_video: impl AsRef<Path>,
@@ -100,17 +114,77 @@ pub fn annotate_video(
     Ok(results)
 }
 
-/// Debug fn to check decoding speed
+/// Run video-decoding frame by frame
+///
+/// This is for testing purposes only to measures the decoder-runtime on different targets
 pub fn iterate_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
+    init_video_rs();
     let mut decoder = Decoder::new(path_video.as_ref())?;
     let t = time::Instant::now();
+    let mut tf = time::Instant::now();
     for next_frame in decoder.decode_iter() {
+        debug!("next frame: {:?}", tf.elapsed());
         if let Ok((ts, frame)) = next_frame {
             debug!("{} | {:?}", ts, frame.shape());
         } else {
             break;
         }
+        tf = time::Instant::now();
     }
     debug!("iterate: {:?}", t.elapsed());
     Ok(())
+}
+
+/// Run video-detection multi-threaded
+///
+/// This version of `detect_video` runs decoding and detection in two separate threads.
+///
+/// # Example
+/// ```
+/// use video_inference::{DetectionConfig, detect_video_multithread};
+/// let config = DetectionConfig {interval: Some(1.0), ..Default::default()};
+/// let path_video = "./tests/assets/video.mp4";
+/// let path_onnx = "./tests/assets/model.onnx";
+/// let bboxes = detect_video_multithread(path_video, path_onnx, &config)?;
+/// ```
+pub fn detect_video_multithread(
+    path_video: impl AsRef<Path>,
+    path_onnx: impl AsRef<Path>,
+    config: &DetectionConfig,
+) -> Result<Vec<Vec<BoundingBox>>, Error> {
+    init_video_rs();
+    // sync_channel used here for backpressure on the decoder loop
+    let (tx, rx) = sync_channel::<DetectionTask>(10);
+    let mut decoder = Decoder::new(path_video.as_ref().to_path_buf())?;
+    let target_size = decoder.size();
+    let n_frames = decoder.frames()?;
+
+    let duration = decoder.duration()?.as_secs();
+    let interval_frames = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
+
+    let path_onnx = path_onnx.as_ref().to_path_buf();
+    let config_inner = config.clone();
+    let handle = thread::spawn(move || detection_handler(rx, path_onnx, target_size, config_inner));
+
+    let t = time::Instant::now();
+    for (f, next_frame) in decoder.decode_iter().enumerate() {
+        if let Ok((_ts, frame)) = next_frame {
+            if f % interval_frames == 0 {
+                debug!("{}/{}", f, n_frames);
+                let task = DetectionTask::new(frame);
+                tx.send(task)
+                    .map_err(|_| anyhow!("Failed: Detection thread dropped!"))?;
+            }
+        } else {
+            break;
+        }
+    }
+    debug!("decode video: {:?}", t.elapsed());
+    // drop the last tx clone so rx knows when all senders are gone
+    drop(tx);
+    let bboxes = handle
+        .join()
+        .map_err(|e| anyhow!("Detection thread paniced: {e:?}"))??;
+    debug!("detect video: {:?}", t.elapsed());
+    Ok(bboxes)
 }

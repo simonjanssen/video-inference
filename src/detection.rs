@@ -98,7 +98,7 @@ impl BoundingBox {
             y2,
             score: conf,
             class_idx: class_idx as i32,
-            frame_idx: frame_idx
+            frame_idx,
         }
     }
 
@@ -218,7 +218,10 @@ pub(crate) fn extract_bboxes(
     //let mut bboxes = Vec::new();
     let mut bboxes: Vec<BoundingBox> = Vec::with_capacity(candidates_image.len_of(Axis(1)));
     for candidate in candidates_image.axis_iter(Axis(1)) {
-        let bbox = BoundingBox::from_array(candidate.to_shape(candidate.len()).unwrap().view(), frame_idx);
+        let bbox = BoundingBox::from_array(
+            candidate.to_shape(candidate.len()).unwrap().view(),
+            frame_idx,
+        );
         bboxes.push(bbox);
     }
     let mut bboxes = nms(&bboxes, config.iou_thres);

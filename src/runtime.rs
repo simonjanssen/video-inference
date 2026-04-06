@@ -17,10 +17,23 @@ use crate::{
 
 static INIT_VIDEO_RS: Once = Once::new();
 
-fn init_video_rs() {
+pub(crate) fn init_video_rs() {
     INIT_VIDEO_RS.call_once(|| {
         video_rs::init().expect("failed to initialize video-rs (FFmpeg)");
     });
+}
+
+pub(crate) fn calc_interval_frames(duration: f32, frames: u32, interval: Option<f32>) -> u32 {
+    match interval {
+        Some(interval) => {
+            if duration > 0.0 && frames > 0 {
+                ((frames as f32 / duration) * interval).round().max(1.0) as u32
+            } else {
+                1
+            }
+        }
+        None => 1,
+    }
 }
 
 pub(crate) struct RuntimeConfig {
@@ -32,6 +45,21 @@ pub(crate) struct RuntimeConfig {
     pub target_width: u32,
     pub target_height: u32,
     pub output_tensor_name: String,
+}
+
+impl Default for RuntimeConfig {
+    fn default() -> Self {
+        Self {
+            conf_thres: 0.25,
+            iou_thres: 0.4,
+            max_detect: 300,
+            input_tensor_height: 640,
+            input_tensor_width: 640,
+            target_height: 640,
+            target_width: 640,
+            output_tensor_name: "output0".to_string(),
+        }
+    }
 }
 
 pub(crate) struct Runtime {
@@ -137,7 +165,9 @@ impl Runtime {
         );
         let mut bboxes = Vec::with_capacity(self.capacity());
         let t = time::Instant::now();
+        let mut tf = time::Instant::now();
         for (f, next_frame) in self.decoder.decode_iter().enumerate() {
+            debug!("next frame: {:?}", tf.elapsed());
             if let Ok((ts, frame)) = next_frame {
                 if f % self.interval_frames == 0 {
                     debug!("{}/{}", f, self.n_frames);
@@ -155,6 +185,7 @@ impl Runtime {
             } else {
                 break;
             }
+            tf = time::Instant::now();
         }
         debug!("detect video: {:?}", t.elapsed());
         Ok(bboxes)
@@ -203,19 +234,9 @@ impl RuntimeBuilder {
         let decoder = Decoder::new(&*path_video)?;
         let (target_width, target_height) = decoder.size();
         let n_frames = decoder.frames()?;
-        let interval_frames = match self.interval {
-            Some(interval_sec) => {
-                let duration_sec = decoder.duration()?.as_secs();
-                if duration_sec > 0.0 && n_frames > 0 {
-                    ((n_frames as f32 / duration_sec) * interval_sec)
-                        .round()
-                        .max(1.0) as usize
-                } else {
-                    1
-                }
-            }
-            None => 1,
-        };
+        let duration = decoder.duration()?.as_secs();
+        let interval_frames =
+            calc_interval_frames(duration, n_frames as u32, self.interval) as usize;
         let resizer = fr::Resizer::new();
         Ok(Runtime {
             session,
