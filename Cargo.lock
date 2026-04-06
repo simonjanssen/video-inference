@@ -2436,6 +2436,7 @@ dependencies = [
  "ort",
  "rayon",
  "serde",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "video-rs",

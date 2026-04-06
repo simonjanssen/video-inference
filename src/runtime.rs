@@ -143,6 +143,7 @@ impl Runtime {
                     debug!("{}/{}", f, self.n_frames);
                     let bboxes_frame = detect_frame(
                         &frame,
+                        Some(f as u32),
                         &self.config,
                         &mut self.session,
                         &mut self.resizer,

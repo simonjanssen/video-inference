@@ -8,6 +8,7 @@ fn bbox(x1: f32, y1: f32, x2: f32, y2: f32, score: f32, class_idx: i32) -> Bound
         y2,
         score,
         class_idx,
+        frame_idx: None,
     }
 }
 

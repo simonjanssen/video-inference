@@ -1,5 +1,4 @@
 use anyhow::Error;
-use tracing::info;
 use tracing_subscriber::EnvFilter;
 use video_inference::{DetectionConfig, detect_video};
 
@@ -15,6 +14,8 @@ fn main() -> Result<(), Error> {
     let path_video = "./tests/assets/video.mp4";
     let path_onnx = "./tests/assets/model.onnx";
     let bboxes = detect_video(path_video, path_onnx, &config)?;
-    info!("done: {}", bboxes.len());
+    let file = std::fs::File::create("./tests/assets/video_ann.json")?;
+    let writer = std::io::BufWriter::new(file);
+    serde_json::to_writer_pretty(writer, &bboxes)?;
     Ok(())
 }

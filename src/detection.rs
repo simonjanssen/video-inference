@@ -26,6 +26,7 @@ pub struct BoundingBox {
     pub y2: f32, // bottom
     pub score: f32,
     pub class_idx: i32,
+    pub frame_idx: Option<u32>, // frame index
 }
 
 impl BoundingBox {
@@ -75,7 +76,7 @@ impl BoundingBox {
         }
     }
 
-    pub fn from_array(array: ArrayView1<f32>) -> Self {
+    pub fn from_array(array: ArrayView1<f32>, frame_idx: Option<u32>) -> Self {
         let bbox_xywh = array.slice(s![..4]).to_vec();
         let confs = array.slice(s![4..]).to_vec();
         let (class_idx, conf) = confs
@@ -97,6 +98,7 @@ impl BoundingBox {
             y2,
             score: conf,
             class_idx: class_idx as i32,
+            frame_idx: frame_idx
         }
     }
 
@@ -135,6 +137,7 @@ pub fn nms(boxes: &[BoundingBox], iou_threshold: f32) -> Vec<BoundingBox> {
                 y2: bbox.y2 + class_offset,
                 score: bbox.score,
                 class_idx: bbox.class_idx, // Keep class_idx the same
+                frame_idx: bbox.frame_idx,
             };
             (shifted_bbox, i) // Keep track of the original index
         })
@@ -165,6 +168,7 @@ pub fn nms(boxes: &[BoundingBox], iou_threshold: f32) -> Vec<BoundingBox> {
 
 pub(crate) fn detect_frame(
     frame: &Array3<u8>,
+    frame_idx: Option<u32>,
     config: &RuntimeConfig,
     session: &mut Session,
     resizer: &mut Resizer,
@@ -180,7 +184,7 @@ pub(crate) fn detect_frame(
     let session_outputs = session.run(session_inputs)?;
     let dt_inference = t.elapsed();
     let t = time::Instant::now();
-    let bboxes = extract_bboxes(session_outputs, config)?;
+    let bboxes = extract_bboxes(session_outputs, config, frame_idx)?;
     let dt_postprocess = t.elapsed();
 
     let class_idxs: Vec<_> = bboxes.iter().map(|b| b.class_idx).collect();
@@ -195,6 +199,7 @@ pub(crate) fn detect_frame(
 pub(crate) fn extract_bboxes(
     session_outputs: SessionOutputs<'_>,
     config: &RuntimeConfig,
+    frame_idx: Option<u32>,
 ) -> Result<Vec<BoundingBox>, Error> {
     let output = session_outputs[config.output_tensor_name.as_ref()].try_extract_array::<f32>()?;
     let view_candidates = output.slice(s![0, 4.., ..]);
@@ -213,7 +218,7 @@ pub(crate) fn extract_bboxes(
     //let mut bboxes = Vec::new();
     let mut bboxes: Vec<BoundingBox> = Vec::with_capacity(candidates_image.len_of(Axis(1)));
     for candidate in candidates_image.axis_iter(Axis(1)) {
-        let bbox = BoundingBox::from_array(candidate.to_shape(candidate.len()).unwrap().view());
+        let bbox = BoundingBox::from_array(candidate.to_shape(candidate.len()).unwrap().view(), frame_idx);
         bboxes.push(bbox);
     }
     let mut bboxes = nms(&bboxes, config.iou_thres);
