@@ -18,6 +18,7 @@ fn xywh_to_xyxy(x: &f32, y: &f32, w: &f32, h: &f32) -> (f32, f32, f32, f32) {
 }
 
 #[derive(Default, Clone, Debug, Copy)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BoundingBox {
     pub x1: f32, // left
     pub y1: f32, // top
