@@ -10,6 +10,6 @@ fn main() -> Result<(), Error> {
     // iterate every frame
     iterate_video(path_video)?;
     // vs. iterate over keyframes
-    iterate_video_keyframes(path_video, Some(50))?;
+    iterate_video_keyframes(path_video, Some(47))?;
     Ok(())
 }

@@ -146,12 +146,13 @@ pub fn iterate_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
 /// Hopefully, this is significantly faster than sequential decoding when the desired
 /// interval is larger than the keyframe spacing, at the cost of frame-exact
 /// positioning.
-pub fn iterate_video_keyframes(path_video: impl AsRef<Path>, interval: Option<usize>) -> Result<(), Error> {
+pub fn iterate_video_keyframes(
+    path_video: impl AsRef<Path>,
+    interval: Option<usize>,
+) -> Result<(), Error> {
     init_video_rs();
     let mut decoder = Decoder::new(path_video.as_ref())?;
     let t = time::Instant::now();
-    //let mut tf = time::Instant::now();
-    //let (w, h) = decoder.size();
     let n_frames = decoder.frames()? as i64;
     let fps = decoder.frame_rate();
     let interval = interval.unwrap_or(50);
@@ -171,11 +172,6 @@ pub fn iterate_video_keyframes(path_video: impl AsRef<Path>, interval: Option<us
         }
         last_ts = ts.as_secs();
         debug!("{} / {}", f, ts.as_secs());
-        // let (raw, _) = frame.into_raw_vec_and_offset();
-        // let rgb_img = image::RgbImage::from_raw(w as u32, h as u32, raw).unwrap();
-        // let dyn_img = image::DynamicImage::ImageRgb8(rgb_img);
-        // let path_img = format!("./tmp/{:03}.jpg", f);
-        // dyn_img.save(path_img)?;
     }
     debug!("iterate: {:?}", t.elapsed());
     Ok(())
@@ -231,6 +227,71 @@ pub fn detect_video_multithread(
     let bboxes = handle
         .join()
         .map_err(|e| anyhow!("Detection thread paniced: {e:?}"))??;
-    debug!("detect video: {:?}", t.elapsed());
+    let dt = t.elapsed().as_secs_f32();
+    debug!(
+        "detect video: {:?} ({} frames, {} frames/sec)",
+        dt,
+        bboxes.len(),
+        (bboxes.len() as f32 / dt)
+    );
+    Ok(bboxes)
+}
+
+pub fn detect_video_multithread_keyframes(
+    path_video: impl AsRef<Path>,
+    path_onnx: impl AsRef<Path>,
+    config: &DetectionConfig,
+) -> Result<Vec<Vec<BoundingBox>>, Error> {
+    init_video_rs();
+    // sync_channel used here for backpressure on the decoder loop
+    let (tx, rx) = sync_channel::<DetectionTask>(10);
+    let mut decoder = Decoder::new(path_video.as_ref().to_path_buf())?;
+    let target_size = decoder.size();
+    let n_frames = decoder.frames()? as i64;
+
+    let duration = decoder.duration()?.as_secs();
+    let interval = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
+    debug!("interval frames: {}", interval);
+
+    let fps = decoder.frame_rate();
+
+    let path_onnx = path_onnx.as_ref().to_path_buf();
+    let config_inner = config.clone();
+    let handle = thread::spawn(move || detection_handler(rx, path_onnx, target_size, config_inner));
+
+    let t = time::Instant::now();
+    let mut last_ts: f32 = -1.0;
+    for f in (0i64..n_frames).step_by(interval) {
+        let target_ms = (f as f64 / fps as f64 * 1000.0) as i64;
+        let Ok(()) = decoder.seek(target_ms) else {
+            break;
+        };
+        let Ok((ts, frame)) = decoder.decode() else {
+            break;
+        };
+        // skip if seek landed on the same keyframe as last iteration
+        if ts.as_secs() == last_ts {
+            debug!("skipping previous keyframe");
+            continue;
+        }
+        last_ts = ts.as_secs();
+        debug!("{} / {}", f, ts.as_secs());
+        let task = DetectionTask::new(frame);
+        tx.send(task)
+            .map_err(|_| anyhow!("Failed: Detection thread dropped!"))?;
+    }
+    debug!("decode video: {:?}", t.elapsed());
+    // drop the last tx clone so rx knows when all senders are gone
+    drop(tx);
+    let bboxes = handle
+        .join()
+        .map_err(|e| anyhow!("Detection thread paniced: {e:?}"))??;
+    let dt = t.elapsed().as_secs_f32();
+    debug!(
+        "detect video: {:?} ({} frames, {} frames/sec)",
+        dt,
+        bboxes.len(),
+        (bboxes.len() as f32 / dt)
+    );
     Ok(bboxes)
 }

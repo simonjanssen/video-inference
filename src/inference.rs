@@ -30,7 +30,7 @@ pub(crate) fn detect_input_shape(
 ) -> Result<(u32, u32), Error> {
     let inputs = session.inputs();
     for input in inputs {
-        debug!("{:?}", input);
+        //debug!("{:?}", input);
         let name_matched = input_name.is_none_or(|name| input.name() == name);
         if name_matched && let Some(dims) = input.dtype().tensor_shape() {
             let d = dims.len();
