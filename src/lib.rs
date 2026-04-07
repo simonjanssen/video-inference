@@ -146,7 +146,7 @@ pub fn iterate_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
 /// Hopefully, this is significantly faster than sequential decoding when the desired
 /// interval is larger than the keyframe spacing, at the cost of frame-exact
 /// positioning.
-pub fn iterate_video_keyframes(path_video: impl AsRef<Path>) -> Result<(), Error> {
+pub fn iterate_video_keyframes(path_video: impl AsRef<Path>, interval: Option<usize>) -> Result<(), Error> {
     init_video_rs();
     let mut decoder = Decoder::new(path_video.as_ref())?;
     let t = time::Instant::now();
@@ -154,7 +154,7 @@ pub fn iterate_video_keyframes(path_video: impl AsRef<Path>) -> Result<(), Error
     //let (w, h) = decoder.size();
     let n_frames = decoder.frames()? as i64;
     let fps = decoder.frame_rate();
-    let interval = 10;
+    let interval = interval.unwrap_or(50);
     let mut last_ts: f32 = -1.0;
     for f in (0i64..n_frames).step_by(interval) {
         let target_ms = (f as f64 / fps as f64 * 1000.0) as i64;
@@ -166,7 +166,7 @@ pub fn iterate_video_keyframes(path_video: impl AsRef<Path>) -> Result<(), Error
         };
         // skip if seek landed on the same keyframe as last iteration
         if ts.as_secs() == last_ts {
-            //debug!("skipping");
+            debug!("skipping previous keyframe");
             continue;
         }
         last_ts = ts.as_secs();
