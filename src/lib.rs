@@ -121,15 +121,61 @@ pub fn iterate_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
     init_video_rs();
     let mut decoder = Decoder::new(path_video.as_ref())?;
     let t = time::Instant::now();
-    let mut tf = time::Instant::now();
-    for next_frame in decoder.decode_iter() {
-        debug!("next frame: {:?}", tf.elapsed());
-        if let Ok((ts, frame)) = next_frame {
-            debug!("{} | {:?}", ts, frame.shape());
+    //let mut tf = time::Instant::now();
+    for (f, next_frame) in decoder.decode_iter().enumerate() {
+        if let Ok((ts, _frame)) = next_frame {
+            debug!("{} | {:?}", f, ts.as_secs());
         } else {
             break;
         }
-        tf = time::Instant::now();
+        //tf = time::Instant::now();
+    }
+    debug!("iterate: {:?}", t.elapsed());
+    Ok(())
+}
+
+/// Sample video frames at regular intervals using keyframe-based seeking.
+///
+/// Instead of decoding every frame sequentially, this function seeks directly to
+/// target positions in the video, skipping intermediate frames entirely. Because
+/// seeking lands on the nearest keyframe *at or before* the target, the actual
+/// sampling granularity is limited by the video's keyframe interval (typically
+/// every few seconds). Duplicate keyframes from consecutive seeks are
+/// deduplicated so each unique frame is only processed once.
+///
+/// Hopefully, this is significantly faster than sequential decoding when the desired
+/// interval is larger than the keyframe spacing, at the cost of frame-exact
+/// positioning.
+pub fn iterate_video_keyframes(path_video: impl AsRef<Path>) -> Result<(), Error> {
+    init_video_rs();
+    let mut decoder = Decoder::new(path_video.as_ref())?;
+    let t = time::Instant::now();
+    //let mut tf = time::Instant::now();
+    //let (w, h) = decoder.size();
+    let n_frames = decoder.frames()? as i64;
+    let fps = decoder.frame_rate();
+    let interval = 10;
+    let mut last_ts: f32 = -1.0;
+    for f in (0i64..n_frames).step_by(interval) {
+        let target_ms = (f as f64 / fps as f64 * 1000.0) as i64;
+        let Ok(()) = decoder.seek(target_ms) else {
+            break;
+        };
+        let Ok((ts, _frame)) = decoder.decode() else {
+            break;
+        };
+        // skip if seek landed on the same keyframe as last iteration
+        if ts.as_secs() == last_ts {
+            //debug!("skipping");
+            continue;
+        }
+        last_ts = ts.as_secs();
+        debug!("{} / {}", f, ts.as_secs());
+        // let (raw, _) = frame.into_raw_vec_and_offset();
+        // let rgb_img = image::RgbImage::from_raw(w as u32, h as u32, raw).unwrap();
+        // let dyn_img = image::DynamicImage::ImageRgb8(rgb_img);
+        // let path_img = format!("./tmp/{:03}.jpg", f);
+        // dyn_img.save(path_img)?;
     }
     debug!("iterate: {:?}", t.elapsed());
     Ok(())

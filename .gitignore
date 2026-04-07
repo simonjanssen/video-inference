@@ -2,6 +2,7 @@
 /data
 /__deprecated
 /.copilot
+/tmp
 *env*
 *ENV*
 .DS_Store
