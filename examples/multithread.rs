@@ -15,10 +15,10 @@ fn main() -> Result<(), Error> {
     };
     let path_video = "./tests/assets/video.mp4";
     let path_onnx = "./tests/assets/model.onnx";
-    let bboxes = detect_video_multithread(path_video, path_onnx, &config)?;
-    let file = std::fs::File::create("./tests/assets/video_mt.json")?;
-    let writer = std::io::BufWriter::new(file);
-    serde_json::to_writer_pretty(writer, &bboxes)?;
+    // let bboxes = detect_video_multithread(path_video, path_onnx, &config)?;
+    // let file = std::fs::File::create("./tests/assets/video_mt.json")?;
+    // let writer = std::io::BufWriter::new(file);
+    // serde_json::to_writer_pretty(writer, &bboxes)?;
 
     let bboxes = detect_video_multithread_keyframes(path_video, path_onnx, &config)?;
     let file = std::fs::File::create("./tests/assets/video_mt_kf.json")?;

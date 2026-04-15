@@ -2,6 +2,8 @@ use anyhow::Error;
 use fast_image_resize as fr;
 use ndarray::Array3;
 use ort::value::{Tensor, TensorValueType, Value};
+use tracing::debug;
+use video_rs::Decoder;
 
 use crate::runtime::RuntimeConfig;
 
@@ -22,6 +24,7 @@ pub(crate) fn load_resized_tensor(
     resizer: &mut fr::Resizer,
     dst_image: &mut fr::images::Image,
 ) -> Result<Value<TensorValueType<f32>>, Error> {
+    debug!("img_arr: {:?}", img_arr.shape());
     let (raw, _) = img_arr
         .as_standard_layout()
         .into_owned()
@@ -55,4 +58,23 @@ pub(crate) fn load_resized_tensor(
     )?;
     let tensor = Tensor::from_array(arr)?;
     Ok(tensor)
+}
+
+pub(crate) fn debug_decoder(decoder: &Decoder) -> Result<(), Error> {
+    let duration = decoder.duration()?;
+    let frame_rate = decoder.frame_rate();
+    let frames = decoder.frames()?;
+    let size = decoder.size();
+    let size_out = decoder.size_out();
+    let time_base = decoder.time_base();
+    debug!(
+        ?duration,
+        ?frame_rate,
+        frames,
+        ?size,
+        ?size_out,
+        ?time_base,
+        "Decoder properties"
+    );
+    Ok(())
 }

@@ -1,8 +1,11 @@
 use anyhow::{Error, anyhow};
+use ffmpeg_next::decoder::decoder;
+use video_rs::hwaccel::HardwareAccelerationDeviceType;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::sync_channel;
 use std::{thread, time};
 use tracing::debug;
+use video_rs::{DecoderBuilder, Options};
 use video_rs::decode::Decoder;
 
 pub mod detection;
@@ -16,6 +19,7 @@ mod vizualize;
 //use inference::detect_frame;
 
 use crate::detection::BoundingBox;
+use crate::loaders::debug_decoder;
 use crate::parallel::{DetectionTask, detection_handler};
 use crate::runtime::{RuntimeBuilder, calc_interval_frames, init_video_rs};
 
@@ -196,7 +200,7 @@ pub fn detect_video_multithread(
 ) -> Result<Vec<Vec<BoundingBox>>, Error> {
     init_video_rs();
     // sync_channel used here for backpressure on the decoder loop
-    let (tx, rx) = sync_channel::<DetectionTask>(10);
+    let (tx, rx) = sync_channel::<DetectionTask>(15);
     let mut decoder = Decoder::new(path_video.as_ref().to_path_buf())?;
     let target_size = decoder.size();
     let n_frames = decoder.frames()?;
@@ -244,8 +248,16 @@ pub fn detect_video_multithread_keyframes(
 ) -> Result<Vec<Vec<BoundingBox>>, Error> {
     init_video_rs();
     // sync_channel used here for backpressure on the decoder loop
-    let (tx, rx) = sync_channel::<DetectionTask>(10);
-    let mut decoder = Decoder::new(path_video.as_ref().to_path_buf())?;
+    let (tx, rx) = sync_channel::<DetectionTask>(15);
+
+    let devices = HardwareAccelerationDeviceType::list_available();
+    debug!("available hardware acceleration devices: {:?}", devices);
+    let mut decoder = DecoderBuilder::new(path_video.as_ref().to_path_buf())
+        .with_hardware_acceleration(HardwareAccelerationDeviceType::VideoToolbox)
+        //.with_resize(video_rs::Resize::Fit(640, 640))
+        .build()?;
+    debug_decoder(&decoder)?;
+
     let target_size = decoder.size();
     let n_frames = decoder.frames()? as i64;
 
