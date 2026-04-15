@@ -24,22 +24,31 @@ pub(crate) fn load_resized_tensor(
     resizer: &mut fr::Resizer,
     dst_image: &mut fr::images::Image,
 ) -> Result<Value<TensorValueType<f32>>, Error> {
-    debug!("img_arr: {:?}", img_arr.shape());
-    let (raw, _) = img_arr
-        .as_standard_layout()
-        .into_owned()
-        .into_raw_vec_and_offset();
-    let src_image = fr::images::Image::from_vec_u8(
-        config.target_width,
-        config.target_height,
-        raw,
-        fr::PixelType::U8x3,
-    )?;
-    resizer.resize(&src_image, dst_image, None)?;
+    let pixels = (config.input_tensor_height * config.input_tensor_width) as usize;
+    let needs_resize =
+        config.target_width != config.input_tensor_width
+        || config.target_height != config.input_tensor_height;
+
+    let std_layout;
+    let src: &[u8] = if needs_resize {
+        let (raw, _) = img_arr
+            .as_standard_layout()
+            .into_owned()
+            .into_raw_vec_and_offset();
+        let src_image = fr::images::Image::from_vec_u8(
+            config.target_width,
+            config.target_height,
+            raw,
+            fr::PixelType::U8x3,
+        )?;
+        resizer.resize(&src_image, dst_image, None)?;
+        dst_image.buffer()
+    } else {
+        std_layout = img_arr.as_standard_layout();
+        std_layout.as_slice().expect("contiguous HWC frame")
+    };
 
     // Single-pass: normalize u8→f32 and transpose HWC→CHW
-    let src = dst_image.buffer();
-    let pixels = (config.input_tensor_height * config.input_tensor_width) as usize;
     let mut chw = vec![0.0f32; 3 * pixels];
     for i in 0..pixels {
         chw[i] = src[i * 3] as f32 / 255.0;

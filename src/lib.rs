@@ -254,11 +254,11 @@ pub fn detect_video_multithread_keyframes(
     debug!("available hardware acceleration devices: {:?}", devices);
     let mut decoder = DecoderBuilder::new(path_video.as_ref().to_path_buf())
         .with_hardware_acceleration(HardwareAccelerationDeviceType::VideoToolbox)
-        //.with_resize(video_rs::Resize::Fit(640, 640))
+        .with_resize(video_rs::Resize::Exact(640, 640))
         .build()?;
     debug_decoder(&decoder)?;
 
-    let target_size = decoder.size();
+    let target_size = decoder.size_out();
     let n_frames = decoder.frames()? as i64;
 
     let duration = decoder.duration()?.as_secs();
