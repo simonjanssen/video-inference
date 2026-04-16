@@ -1,6 +1,6 @@
 [package]
 name = "video-inference"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 description = "Run ONNX object-detection models on video frames with hardware-accelerated decoding and inference"
 license = "MIT"
@@ -18,7 +18,6 @@ serde = ["dep:serde"]
 
 [dependencies]
 anyhow = "1.0.102"
-fast_image_resize = "6.0"
 ndarray = "0.17.2"
 ort = { version = "2.0.0-rc.12", features = ["tls-rustls"] }
 tracing = "0.1.44"
