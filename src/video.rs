@@ -1,7 +1,8 @@
 use anyhow::Error;
+use tracing::debug;
 use std::path::Path;
 use std::sync::Once;
-use video_rs::{Decoder, DecoderBuilder};
+use video_rs::{Decoder, DecoderBuilder, hwaccel::HardwareAccelerationDeviceType};
 
 static INIT_VIDEO_RS: Once = Once::new();
 
@@ -28,6 +29,8 @@ pub(crate) fn calc_interval_frames(duration: f32, frames: u32, interval: Option<
 /// Also applies hardware acceleration if available.
 pub(crate) fn get_decoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<Decoder, Error> {
     let (w, h) = size;
+    let devices = HardwareAccelerationDeviceType::list_available();
+    debug!("available devices: {:?}", devices);
     let mut builder =
         DecoderBuilder::new(path.as_ref().to_path_buf()).with_resize(video_rs::Resize::Exact(w, h));
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]

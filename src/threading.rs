@@ -3,7 +3,6 @@ use ndarray::Array3;
 use ort::session::Session;
 use std::sync::mpsc::Receiver;
 
-
 use crate::DetectionConfig;
 use crate::detection::{BoundingBox, detect_image};
 
