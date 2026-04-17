@@ -1,0 +1,79 @@
+use anyhow::{Error, bail};
+use ndarray::Array3;
+use ort::session::{Session, builder::GraphOptimizationLevel};
+use ort::value::{Tensor, TensorValueType, Value};
+use std::path::Path;
+use tracing::debug;
+
+pub(crate) fn load_session(path_onnx: impl AsRef<Path>) -> Result<Session, Error> {
+    let mut builder = Session::builder()?
+        .with_optimization_level(GraphOptimizationLevel::Level3)
+        .unwrap()
+        .with_intra_threads(4)
+        .unwrap();
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    {
+        use ort::ep::CoreML;
+        builder = builder
+            .with_execution_providers([CoreML::default()
+                .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
+                .build()])
+            .unwrap();
+    }
+
+    let session = builder.commit_from_file(path_onnx)?;
+    Ok(session)
+}
+
+pub(crate) fn detect_input_shape(
+    session: &Session,
+    input_name: Option<&str>,
+) -> Result<(u32, u32), Error> {
+    let inputs = session.inputs();
+    for input in inputs {
+        //debug!("{:?}", input);
+        let name_matched = input_name.is_none_or(|name| input.name() == name);
+        if name_matched && let Some(dims) = input.dtype().tensor_shape() {
+            let d = dims.len();
+            if d > 1 {
+                let (w, h) = (dims[d - 2], dims[d - 1]);
+                debug!("onnx model has image input shape {} x {}", w, h);
+                return Ok((w as u32, h as u32));
+            }
+        }
+    }
+    bail!("Failed to determine input shape!")
+}
+
+/// Normalize a HWC u8 frame into a NCHW f32 tensor for inference (no resize).
+///
+/// Normalization (u8→f32, /255) and HWC→CHW transpose are fused into a single pass,
+/// eliminating an intermediate f32 HWC buffer and the non-contiguous copy that
+/// `ndarray::permuted_axes` + `Tensor::from_array` would otherwise require.
+pub(crate) fn load_tensor(
+    img_arr: &Array3<u8>,
+    size_tensor: (u32, u32),
+) -> Result<Value<TensorValueType<f32>>, Error> {
+    let std_layout = img_arr.as_standard_layout();
+    let src = std_layout.as_slice().expect("contiguous HWC frame");
+    hwc_to_nchw_tensor(src, size_tensor)
+}
+
+/// Single-pass: normalize u8→f32 and transpose HWC→CHW into a NCHW tensor.
+fn hwc_to_nchw_tensor(
+    src: &[u8],
+    size_tensor: (u32, u32),
+) -> Result<Value<TensorValueType<f32>>, Error> {
+    let (w, h) = size_tensor;
+    let pixels = (w * h) as usize;
+    let mut chw = vec![0.0f32; 3 * pixels];
+    for i in 0..pixels {
+        chw[i] = src[i * 3] as f32 / 255.0;
+        chw[pixels + i] = src[i * 3 + 1] as f32 / 255.0;
+        chw[2 * pixels + i] = src[i * 3 + 2] as f32 / 255.0;
+    }
+    let arr = ndarray::Array::from_shape_vec((1, 3, h as usize, w as usize), chw)?;
+    let tensor = Tensor::from_array(arr)?;
+    Ok(tensor)
+}

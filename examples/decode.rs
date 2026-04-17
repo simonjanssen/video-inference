@@ -1,6 +1,6 @@
 use anyhow::Error;
 use tracing_subscriber::EnvFilter;
-use video_inference::{iterate_video, iterate_video_keyframes};
+use video_inference::{decode_video, decode_video_keyframes};
 
 fn main() -> Result<(), Error> {
     tracing_subscriber::fmt()
@@ -8,8 +8,8 @@ fn main() -> Result<(), Error> {
         .init();
     let path_video = "./tests/assets/video.mp4";
     // iterate every frame
-    iterate_video(path_video)?;
-    // vs. iterate over keyframes
-    iterate_video_keyframes(path_video, Some(47))?;
+    decode_video(path_video)?;
+    // vs. iterate over keyframes - 47 is the optimal frame interval for our test videos
+    decode_video_keyframes(path_video, Some(47))?;
     Ok(())
 }

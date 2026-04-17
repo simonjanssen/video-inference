@@ -1,6 +1,5 @@
-use crate::{loaders::load_resized_tensor, runtime::RuntimeConfig};
+use crate::{DetectionConfig, onnx::load_tensor};
 use anyhow::Error;
-use fast_image_resize::{self as fr, Resizer};
 use ndarray::{Array3, ArrayView1, Axis, s};
 use ort::{
     inputs,
@@ -166,39 +165,10 @@ pub fn nms(boxes: &[BoundingBox], iou_threshold: f32) -> Vec<BoundingBox> {
     kept_boxes
 }
 
-pub(crate) fn detect_frame(
-    frame: &Array3<u8>,
-    frame_idx: Option<u32>,
-    config: &RuntimeConfig,
-    session: &mut Session,
-    resizer: &mut Resizer,
-    dst_image: &mut fr::images::Image,
-) -> Result<Vec<BoundingBox>, Error> {
-    let t = time::Instant::now();
-    let image_tensor = load_resized_tensor(frame, config, resizer, dst_image)?;
-    let session_inputs = inputs! {
-        "images" => image_tensor
-    };
-    let dt_preprocess = t.elapsed();
-    let t = time::Instant::now();
-    let session_outputs = session.run(session_inputs)?;
-    let dt_inference = t.elapsed();
-    let t = time::Instant::now();
-    let bboxes = extract_bboxes(session_outputs, config, frame_idx)?;
-    let dt_postprocess = t.elapsed();
-
-    let class_idxs: Vec<_> = bboxes.iter().map(|b| b.class_idx).collect();
-    debug!(
-        "pre={:.1?} inf={:.1?} post={:.1?} classes={:?}",
-        dt_preprocess, dt_inference, dt_postprocess, class_idxs
-    );
-
-    Ok(bboxes)
-}
-
 pub(crate) fn extract_bboxes(
     session_outputs: SessionOutputs<'_>,
-    config: &RuntimeConfig,
+    config: &DetectionConfig,
+    scale: Option<(f32, f32)>,
     frame_idx: Option<u32>,
 ) -> Result<Vec<BoundingBox>, Error> {
     let output = session_outputs[config.output_tensor_name.as_ref()].try_extract_array::<f32>()?;
@@ -226,17 +196,43 @@ pub(crate) fn extract_bboxes(
     }
     let mut bboxes = nms(&bboxes, config.iou_thres);
     bboxes.truncate(config.max_detect); // keep only max detections
-
-    let (base_w, base_h) = (
-        config.input_tensor_width as f32,
-        config.input_tensor_height as f32,
-    );
-    let (target_w, target_h) = (config.target_width as f32, config.target_height as f32);
-    let scale_w = target_w / base_w;
-    let scale_h = target_h / base_h;
-    for bbox in &mut bboxes {
-        bbox.scale(scale_w, scale_h);
+    if let Some((scale_w, scale_h)) = scale {
+        for bbox in &mut bboxes {
+            bbox.scale(scale_w, scale_h);
+        }
     }
-
     Ok(bboxes)
+}
+
+pub(crate) fn detect_image(
+    session: &mut Session,
+    img_arr: Array3<u8>,
+    config: &DetectionConfig,
+    size_video: (u32, u32),
+    size_onnx: (u32, u32),
+) -> Result<Vec<BoundingBox>, Error> {
+    let t = time::Instant::now();
+    let tensor = load_tensor(&img_arr, size_onnx)?;
+    let session_inputs = inputs! {
+        "images" => tensor
+    };
+    let dt_preprocess = t.elapsed();
+    let t = time::Instant::now();
+    let session_outputs = session.run(session_inputs)?;
+    let dt_inference = t.elapsed();
+    let t = time::Instant::now();
+
+    let (input_tensor_width, input_tensor_height) = size_onnx;
+    let (video_width, video_height) = size_video;
+    let scale_w = (video_width as f32) / (input_tensor_width as f32);
+    let scale_h = (video_height as f32) / (input_tensor_height as f32);
+
+    let bboxes_frame = extract_bboxes(session_outputs, config, Some((scale_w, scale_h)), None)?;
+    let class_idxs: Vec<i32> = bboxes_frame.iter().map(|b| b.class_idx).collect();
+    let dt_postprocess = t.elapsed();
+    debug!(
+        "pre={:.1?} inf={:.1?} post={:.1?} classes={:?}",
+        dt_preprocess, dt_inference, dt_postprocess, class_idxs
+    );
+    Ok(bboxes_frame)
 }

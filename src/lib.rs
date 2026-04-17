@@ -3,21 +3,20 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::sync_channel;
 use std::{thread, time};
 use tracing::debug;
-use video_rs::decode::Decoder;
 
 pub mod detection;
-mod inference;
-mod loaders;
-mod parallel;
-mod runtime;
+mod onnx;
+mod threading;
+mod video;
 #[cfg(feature = "visualize")]
 mod vizualize;
 
 //use inference::detect_frame;
 
-use crate::detection::BoundingBox;
-use crate::parallel::{DetectionTask, detection_handler};
-use crate::runtime::{RuntimeBuilder, calc_interval_frames, init_video_rs};
+use crate::detection::{BoundingBox, detect_image};
+use crate::onnx::{detect_input_shape, load_session};
+use crate::threading::{DetectionTask, detection_handler};
+use crate::video::{calc_interval_frames, get_decoder, init_video_rs};
 
 /// All configuration options for `detect_video` bundled in one struct.
 ///
@@ -76,6 +75,15 @@ impl Default for DetectionConfig {
     }
 }
 
+/// Best Approach
+pub fn detect_video(
+    path_video: impl AsRef<Path>,
+    path_onnx: impl AsRef<Path>,
+    config: &DetectionConfig,
+) -> Result<Vec<Vec<BoundingBox>>, Error> {
+    detect_video_multi_thread_keyframes(path_video, path_onnx, config)
+}
+
 /// Run video-detection on mp4-video
 ///
 /// # Example
@@ -86,95 +94,44 @@ impl Default for DetectionConfig {
 /// let path_onnx = "./tests/assets/model.onnx";
 /// let bboxes = detect_video(path_video, path_onnx, &config)?;
 /// ```
-pub fn detect_video(
+pub fn detect_video_single_thread(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
 ) -> Result<Vec<Vec<BoundingBox>>, Error> {
-    let mut runtime = RuntimeBuilder::from(config)
-        .model(path_onnx)
-        .video(path_video)
-        .build()?;
-    let results = runtime.detect_video()?;
-    Ok(results)
-}
-
-/// Run video-detection and write back detections as video with bounding boxes
-#[cfg(feature = "visualize")]
-pub fn annotate_video(
-    path_video: impl AsRef<Path>,
-    path_onnx: impl AsRef<Path>,
-    config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>, Error> {
-    let mut runtime = RuntimeBuilder::from(config)
-        .model(path_onnx)
-        .video(path_video)
-        .build()?;
-    let results = runtime.annotate_video()?;
-    Ok(results)
-}
-
-/// Run video-decoding frame by frame
-///
-/// This is for testing purposes only to measures the decoder-runtime on different targets
-pub fn iterate_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
     init_video_rs();
-    let mut decoder = Decoder::new(path_video.as_ref())?;
+
+    let mut session = load_session(path_onnx)?;
+    let size_onnx = detect_input_shape(&session, Some("images"))?;
+    let mut decoder = get_decoder(path_video, size_onnx)?;
+    let size_video = decoder.size();
+
+    let n_frames = decoder.frames()?;
+    let duration = decoder.duration()?.as_secs();
+    let interval_frames = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
+
+    let mut bboxes = Vec::new();
     let t = time::Instant::now();
-    //let mut tf = time::Instant::now();
     for (f, next_frame) in decoder.decode_iter().enumerate() {
-        if let Ok((ts, _frame)) = next_frame {
-            debug!("{} | {:?}", f, ts.as_secs());
+        if let Ok((_ts, frame)) = next_frame {
+            if f % interval_frames == 0 {
+                debug!("{}/{}", f, n_frames);
+                let bboxes_frame =
+                    detect_image(&mut session, frame, config, size_video, size_onnx)?;
+                bboxes.push(bboxes_frame);
+            }
         } else {
             break;
         }
-        //tf = time::Instant::now();
     }
-    debug!("iterate: {:?}", t.elapsed());
-    Ok(())
-}
-
-/// Sample video frames at regular intervals using keyframe-based seeking.
-///
-/// Instead of decoding every frame sequentially, this function seeks directly to
-/// target positions in the video, skipping intermediate frames entirely. Because
-/// seeking lands on the nearest keyframe *at or before* the target, the actual
-/// sampling granularity is limited by the video's keyframe interval (typically
-/// every few seconds). Duplicate keyframes from consecutive seeks are
-/// deduplicated so each unique frame is only processed once.
-///
-/// Hopefully, this is significantly faster than sequential decoding when the desired
-/// interval is larger than the keyframe spacing, at the cost of frame-exact
-/// positioning.
-pub fn iterate_video_keyframes(
-    path_video: impl AsRef<Path>,
-    interval: Option<usize>,
-) -> Result<(), Error> {
-    init_video_rs();
-    let mut decoder = Decoder::new(path_video.as_ref())?;
-    let t = time::Instant::now();
-    let n_frames = decoder.frames()? as i64;
-    let fps = decoder.frame_rate();
-    let interval = interval.unwrap_or(50);
-    let mut last_ts: f32 = -1.0;
-    for f in (0i64..n_frames).step_by(interval) {
-        let target_ms = (f as f64 / fps as f64 * 1000.0) as i64;
-        let Ok(()) = decoder.seek(target_ms) else {
-            break;
-        };
-        let Ok((ts, _frame)) = decoder.decode() else {
-            break;
-        };
-        // skip if seek landed on the same keyframe as last iteration
-        if ts.as_secs() == last_ts {
-            debug!("skipping previous keyframe");
-            continue;
-        }
-        last_ts = ts.as_secs();
-        debug!("{} / {}", f, ts.as_secs());
-    }
-    debug!("iterate: {:?}", t.elapsed());
-    Ok(())
+    let dt = t.elapsed().as_secs() as f32;
+    debug!(
+        "decode+detect video: {:?} ({} frames, {} frames/sec)",
+        dt,
+        bboxes.len(),
+        (bboxes.len() as f32 / dt)
+    );
+    Ok(bboxes)
 }
 
 /// Run video-detection multi-threaded
@@ -189,24 +146,27 @@ pub fn iterate_video_keyframes(
 /// let path_onnx = "./tests/assets/model.onnx";
 /// let bboxes = detect_video_multithread(path_video, path_onnx, &config)?;
 /// ```
-pub fn detect_video_multithread(
+pub fn detect_video_multi_thread(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
 ) -> Result<Vec<Vec<BoundingBox>>, Error> {
     init_video_rs();
-    // sync_channel used here for backpressure on the decoder loop
-    let (tx, rx) = sync_channel::<DetectionTask>(10);
-    let mut decoder = Decoder::new(path_video.as_ref().to_path_buf())?;
-    let target_size = decoder.size();
-    let n_frames = decoder.frames()?;
 
+    let session = load_session(path_onnx)?;
+    let size_onnx = detect_input_shape(&session, Some("images"))?;
+    let mut decoder = get_decoder(path_video, size_onnx)?;
+    let size_video = decoder.size();
+
+    let n_frames = decoder.frames()?;
     let duration = decoder.duration()?.as_secs();
     let interval_frames = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
 
-    let path_onnx = path_onnx.as_ref().to_path_buf();
+    // sync_channel used here for backpressure on the decoder loop
+    let (tx, rx) = sync_channel::<DetectionTask>(15);
     let config_inner = config.clone();
-    let handle = thread::spawn(move || detection_handler(rx, path_onnx, target_size, config_inner));
+    let handle =
+        thread::spawn(move || detection_handler(rx, session, config_inner, size_video, size_onnx));
 
     let t = time::Instant::now();
     for (f, next_frame) in decoder.decode_iter().enumerate() {
@@ -237,16 +197,18 @@ pub fn detect_video_multithread(
     Ok(bboxes)
 }
 
-pub fn detect_video_multithread_keyframes(
+pub fn detect_video_multi_thread_keyframes(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
 ) -> Result<Vec<Vec<BoundingBox>>, Error> {
     init_video_rs();
-    // sync_channel used here for backpressure on the decoder loop
-    let (tx, rx) = sync_channel::<DetectionTask>(10);
-    let mut decoder = Decoder::new(path_video.as_ref().to_path_buf())?;
-    let target_size = decoder.size();
+
+    let session = load_session(path_onnx)?;
+    let size_onnx = detect_input_shape(&session, Some("images"))?;
+    let mut decoder = get_decoder(path_video, size_onnx)?;
+    let size_video = decoder.size();
+
     let n_frames = decoder.frames()? as i64;
 
     let duration = decoder.duration()?.as_secs();
@@ -255,9 +217,11 @@ pub fn detect_video_multithread_keyframes(
 
     let fps = decoder.frame_rate();
 
-    let path_onnx = path_onnx.as_ref().to_path_buf();
+    // sync_channel used here for backpressure on the decoder loop
+    let (tx, rx) = sync_channel::<DetectionTask>(15);
     let config_inner = config.clone();
-    let handle = thread::spawn(move || detection_handler(rx, path_onnx, target_size, config_inner));
+    let handle =
+        thread::spawn(move || detection_handler(rx, session, config_inner, size_video, size_onnx));
 
     let t = time::Instant::now();
     let mut last_ts: f32 = -1.0;
@@ -294,4 +258,67 @@ pub fn detect_video_multithread_keyframes(
         (bboxes.len() as f32 / dt)
     );
     Ok(bboxes)
+}
+
+/// Run video-decoding frame by frame
+///
+/// This is for testing purposes only to measures the decoder-runtime on different targets
+pub fn decode_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
+    init_video_rs();
+    let mut decoder = get_decoder(path_video, (640, 640))?;
+    let t = time::Instant::now();
+    //let mut tf = time::Instant::now();
+    for (f, next_frame) in decoder.decode_iter().enumerate() {
+        if let Ok((ts, _frame)) = next_frame {
+            debug!("{} | {:?}", f, ts.as_secs());
+        } else {
+            break;
+        }
+        //tf = time::Instant::now();
+    }
+    debug!("decode video: {:?}", t.elapsed());
+    Ok(())
+}
+
+/// Sample video frames at regular intervals using keyframe-based seeking.
+///
+/// Instead of decoding every frame sequentially, this function seeks directly to
+/// target positions in the video, skipping intermediate frames entirely. Because
+/// seeking lands on the nearest keyframe *at or before* the target, the actual
+/// sampling granularity is limited by the video's keyframe interval (typically
+/// every few seconds). Duplicate keyframes from consecutive seeks are
+/// deduplicated so each unique frame is only processed once.
+///
+/// Hopefully, this is significantly faster than sequential decoding when the desired
+/// interval is larger than the keyframe spacing, at the cost of frame-exact
+/// positioning.
+pub fn decode_video_keyframes(
+    path_video: impl AsRef<Path>,
+    interval: Option<usize>,
+) -> Result<(), Error> {
+    init_video_rs();
+    let mut decoder = get_decoder(path_video, (640, 640))?;
+    let t = time::Instant::now();
+    let n_frames = decoder.frames()? as i64;
+    let fps = decoder.frame_rate();
+    let interval = interval.unwrap_or(50);
+    let mut last_ts: f32 = -1.0;
+    for f in (0i64..n_frames).step_by(interval) {
+        let target_ms = (f as f64 / fps as f64 * 1000.0) as i64;
+        let Ok(()) = decoder.seek(target_ms) else {
+            break;
+        };
+        let Ok((ts, _frame)) = decoder.decode() else {
+            break;
+        };
+        // skip if seek landed on the same keyframe as last iteration
+        if ts.as_secs() == last_ts {
+            debug!("skipping previous keyframe");
+            continue;
+        }
+        last_ts = ts.as_secs();
+        debug!("{} / {}", f, ts.as_secs());
+    }
+    debug!("decode video: {:?}", t.elapsed());
+    Ok(())
 }
