@@ -39,6 +39,7 @@ pub(crate) fn get_decoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<De
         builder = builder.with_hardware_acceleration(HardwareAccelerationDeviceType::VideoToolbox)
     }
     let decoder = builder.build()?;
+    debug!("video has size {:?}", decoder.size());
     Ok(decoder)
 }
 
