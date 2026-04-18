@@ -36,8 +36,15 @@ pub(crate) fn get_decoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<De
         DecoderBuilder::new(path.as_ref().to_path_buf()).with_resize(video_rs::Resize::Exact(w, h));
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
-        use video_rs::hwaccel::HardwareAccelerationDeviceType;
-        builder = builder.with_hardware_acceleration(HardwareAccelerationDeviceType::VideoToolbox)
+        builder = builder.with_hardware_acceleration(HardwareAccelerationDeviceType::VideoToolbox);
+        debug!("using `VideoToolbox` hardware acceleration for video decoding");
+    }
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    {
+        if devices.contains(&HardwareAccelerationDeviceType::Cuda) {
+            builder = builder.with_hardware_acceleration(HardwareAccelerationDeviceType::Cuda);
+            debug!("using `Cuda` hardware acceleration for video decoding");
+        }
     }
     let decoder = builder.build().map_err(|e| VideoInferenceError::Video {
         detail: "Failed to initialize video decoder!".to_string(),
