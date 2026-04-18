@@ -8,11 +8,12 @@ use crate::detection::{BoundingBox, detect_image};
 
 pub(crate) struct DetectionTask {
     frame: Array3<u8>,
+    frame_idx: Option<u32>,
 }
 
 impl DetectionTask {
-    pub fn new(frame: Array3<u8>) -> Self {
-        Self { frame }
+    pub fn new(frame: Array3<u8>, frame_idx: Option<u32>) -> Self {
+        Self { frame, frame_idx }
     }
 }
 
@@ -25,7 +26,7 @@ pub(crate) fn detection_handler(
 ) -> Result<Vec<Vec<BoundingBox>>> {
     let mut bboxes = Vec::new();
     while let Ok(task) = rx.recv() {
-        let bboxes_frame = detect_image(&mut session, task.frame, &config, size_video, size_onnx)?;
+        let bboxes_frame = detect_image(&mut session, task.frame, &config, size_video, size_onnx, task.frame_idx)?;
         bboxes.push(bboxes_frame);
     }
     Ok(bboxes)

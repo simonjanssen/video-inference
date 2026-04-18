@@ -130,7 +130,7 @@ pub fn detect_video_single_thread(
             if f % interval_frames == 0 {
                 debug!("{}/{}", f, n_frames);
                 let bboxes_frame =
-                    detect_image(&mut session, frame, config, size_video, size_onnx)?;
+                    detect_image(&mut session, frame, config, size_video, size_onnx, Some(f as u32))?;
                 bboxes.push(bboxes_frame);
             }
         } else {
@@ -195,7 +195,7 @@ pub fn detect_video_multi_thread(
         if let Ok((_ts, frame)) = next_frame {
             if f % interval_frames == 0 {
                 debug!("{}/{}", f, n_frames);
-                let task = DetectionTask::new(frame);
+                let task = DetectionTask::new(frame, Some(f as u32));
                 tx.send(task).map_err(|_| {
                     Error::Thread("Failed to dispatch to detection thread!".to_string())
                 })?;
@@ -272,7 +272,7 @@ pub fn detect_video_multi_thread_keyframes(
         }
         last_ts = ts.as_secs();
         debug!("{} / {}", f, ts.as_secs());
-        let task = DetectionTask::new(frame);
+        let task = DetectionTask::new(frame, Some(f as u32));
         tx.send(task)
             .map_err(|_| Error::Thread("Failed to dispatch to detection thread!".to_string()))?;
     }

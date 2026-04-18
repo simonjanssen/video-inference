@@ -215,6 +215,7 @@ pub(crate) fn detect_image(
     config: &DetectionConfig,
     size_video: (u32, u32),
     size_onnx: (u32, u32),
+    frame_idx: Option<u32>,
 ) -> Result<Vec<BoundingBox>> {
     let t = time::Instant::now();
     let tensor = load_tensor(&img_arr, size_onnx)?;
@@ -237,7 +238,7 @@ pub(crate) fn detect_image(
     let scale_w = (video_width as f32) / (input_tensor_width as f32);
     let scale_h = (video_height as f32) / (input_tensor_height as f32);
 
-    let bboxes_frame = extract_bboxes(session_outputs, config, Some((scale_w, scale_h)), None)?;
+    let bboxes_frame = extract_bboxes(session_outputs, config, Some((scale_w, scale_h)), frame_idx)?;
     let class_idxs: Vec<i32> = bboxes_frame.iter().map(|b| b.class_idx).collect();
     let dt_postprocess = t.elapsed();
     debug!(
