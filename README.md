@@ -35,3 +35,8 @@ fn main() -> Result<(), Error> {
 ```
 
 See the [examples](./examples/) directory for more usage patterns.
+
+
+## Troubleshooting
+
+Specifically for `linux/cuda` [execution providers](https://ort.pyke.io/perf/execution-providers) issues there's a [skill-formatted guide](./.github/skills/cuda-setup/) with instructions that turned out to be helpful for my own setup.
