@@ -1,14 +1,15 @@
-use anyhow::Error;
-use tracing::debug;
 use std::path::Path;
 use std::sync::Once;
+use tracing::debug;
 use video_rs::{Decoder, DecoderBuilder, hwaccel::HardwareAccelerationDeviceType};
+
+use crate::{Result, error::VideoInferenceError};
 
 static INIT_VIDEO_RS: Once = Once::new();
 
 pub(crate) fn init_video_rs() {
     INIT_VIDEO_RS.call_once(|| {
-        video_rs::init().expect("failed to initialize video-rs (FFmpeg)");
+        video_rs::init().expect("Failed to initialize video-rs/ffmpeg backend!");
     });
 }
 
@@ -27,7 +28,7 @@ pub(crate) fn calc_interval_frames(duration: f32, frames: u32, interval: Option<
 
 /// Initialize video_rs::Decoder with fitting output frame size for ONNX-inference.
 /// Also applies hardware acceleration if available.
-pub(crate) fn get_decoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<Decoder, Error> {
+pub(crate) fn get_decoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<Decoder> {
     let (w, h) = size;
     let devices = HardwareAccelerationDeviceType::list_available();
     debug!("available devices: {:?}", devices);
@@ -38,7 +39,10 @@ pub(crate) fn get_decoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<De
         use video_rs::hwaccel::HardwareAccelerationDeviceType;
         builder = builder.with_hardware_acceleration(HardwareAccelerationDeviceType::VideoToolbox)
     }
-    let decoder = builder.build()?;
+    let decoder = builder.build().map_err(|e| VideoInferenceError::Video {
+        detail: "Failed to initialize video decoder!".to_string(),
+        source: e,
+    })?;
     debug!("video has size {:?}", decoder.size());
     Ok(decoder)
 }

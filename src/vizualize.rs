@@ -1,12 +1,13 @@
-use crate::detection::BoundingBox;
+use crate::{detection::BoundingBox, error::VideoInferenceError};
 use ab_glyph::FontArc;
-use anyhow::{Error, Result};
 use image::{DynamicImage, Rgba};
 use imageproc::{
     drawing::{draw_hollow_rect_mut, draw_text_mut},
     rect::Rect,
 };
 use ndarray::Array3;
+
+use crate::Result;
 
 // manually determined scale factors to print annotations / draw boxes
 const SCALE_THICKNESS: f32 = 15. / 3726.;
@@ -28,10 +29,7 @@ const COLORS: [Rgba<u8>; 10] = [
 /// # Draw Rectangles
 /// Draws hollow rectangles onto input image using BoundingBox coordinates
 /// Applies box thickness that is dynamically scaled by input image resolution
-pub(crate) fn draw_bboxes(
-    mut img: DynamicImage,
-    bboxes: &[BoundingBox],
-) -> Result<DynamicImage, Error> {
+pub(crate) fn draw_bboxes(mut img: DynamicImage, bboxes: &[BoundingBox]) -> Result<DynamicImage> {
     let img_d = img.width().min(img.height()) as f32;
     let thickness = SCALE_THICKNESS * img_d; // scale thickness by smaller image edge
     let thickness = (thickness as u32).max(1);
@@ -65,10 +63,7 @@ pub(crate) fn draw_bboxes(
     Ok(img)
 }
 
-pub(crate) fn draw_bboxes_arr(
-    img_arr: Array3<u8>,
-    bboxes: &[BoundingBox],
-) -> Result<Array3<u8>, Error> {
+pub(crate) fn draw_bboxes_arr(img_arr: Array3<u8>, bboxes: &[BoundingBox]) -> Result<Array3<u8>> {
     let (h, w, _) = img_arr.dim();
     let (raw, _) = img_arr.into_raw_vec_and_offset();
     let rgb_img = image::RgbImage::from_raw(w as u32, h as u32, raw).unwrap();
@@ -78,10 +73,11 @@ pub(crate) fn draw_bboxes_arr(
     Ok(annotated_arr3)
 }
 
-pub(crate) fn img_to_arr3(img: &DynamicImage) -> Result<Array3<u8>, Error> {
+pub(crate) fn img_to_arr3(img: &DynamicImage) -> Result<Array3<u8>> {
     let rgb = img.to_rgb8();
     let (width, height) = rgb.dimensions();
     let raw = rgb.into_raw(); // Vec<u8>, length = height * width * 3
-    let arr3 = Array3::from_shape_vec((height as usize, width as usize, 3), raw)?;
+    let arr3 = Array3::from_shape_vec((height as usize, width as usize, 3), raw)
+        .map_err(|e| VideoInferenceError::Io("Failed to load image as array!".to_string()))?;
     Ok(arr3)
 }

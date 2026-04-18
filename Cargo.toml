@@ -1,6 +1,6 @@
 [package]
 name = "video-inference"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 description = "Run ONNX object-detection models on video frames with hardware-accelerated decoding and inference"
 license = "MIT"
@@ -17,7 +17,6 @@ visualize = ["ab_glyph", "image", "imageproc"]
 serde = ["dep:serde"]
 
 [dependencies]
-anyhow = "1.0.102"
 ndarray = "0.17.2"
 ort = { version = "2.0.0-rc.12", features = ["tls-rustls"] }
 tracing = "0.1.44"
@@ -26,6 +25,7 @@ serde = { version = "1.0.228", features = ["derive"], optional = true }
 ab_glyph = { version = "0.2.32", optional = true }
 image = { version = "0.25.10", optional = true }
 imageproc = { version = "0.26.1", optional = true }
+thiserror = "2.0.18"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 ort = { version = "2.0.0-rc.12", features = ["coreml"] }
@@ -37,6 +37,7 @@ ffmpeg-next = { version = "8.1.0", features = ["rpi"] }
 ffmpeg-next = { version = "8.1.0" }
 
 [dev-dependencies]
+anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
 dotenvy = "0.15"
 rayon = "1.11.0"

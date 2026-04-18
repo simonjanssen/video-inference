@@ -1,5 +1,5 @@
 use crate::{DetectionConfig, onnx::load_tensor};
-use anyhow::Error;
+use crate::{Result, VideoInferenceError};
 use ndarray::{Array3, ArrayView1, Axis, s};
 use ort::{
     inputs,
@@ -170,8 +170,13 @@ pub(crate) fn extract_bboxes(
     config: &DetectionConfig,
     scale: Option<(f32, f32)>,
     frame_idx: Option<u32>,
-) -> Result<Vec<BoundingBox>, Error> {
-    let output = session_outputs[config.output_tensor_name.as_ref()].try_extract_array::<f32>()?;
+) -> Result<Vec<BoundingBox>> {
+    let output = session_outputs[config.output_tensor_name.as_ref()]
+        .try_extract_array::<f32>()
+        .map_err(|e| VideoInferenceError::Onnx {
+            detail: "Failed to extract detection results".to_string(),
+            source: e,
+        })?;
     let view_candidates = output.slice(s![0, 4.., ..]);
     let mask_candidates: Vec<bool> = view_candidates
         .axis_iter(Axis(1))
@@ -210,7 +215,7 @@ pub(crate) fn detect_image(
     config: &DetectionConfig,
     size_video: (u32, u32),
     size_onnx: (u32, u32),
-) -> Result<Vec<BoundingBox>, Error> {
+) -> Result<Vec<BoundingBox>> {
     let t = time::Instant::now();
     let tensor = load_tensor(&img_arr, size_onnx)?;
     let session_inputs = inputs! {
@@ -218,7 +223,12 @@ pub(crate) fn detect_image(
     };
     let dt_preprocess = t.elapsed();
     let t = time::Instant::now();
-    let session_outputs = session.run(session_inputs)?;
+    let session_outputs = session
+        .run(session_inputs)
+        .map_err(|e| VideoInferenceError::Onnx {
+            detail: "Inference Failed".to_string(),
+            source: e,
+        })?;
     let dt_inference = t.elapsed();
     let t = time::Instant::now();
 

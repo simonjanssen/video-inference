@@ -1,10 +1,10 @@
-use anyhow::{Error, anyhow};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::sync_channel;
 use std::{thread, time};
 use tracing::debug;
 
 pub mod detection;
+mod error;
 mod onnx;
 mod threading;
 mod video;
@@ -14,9 +14,13 @@ mod vizualize;
 //use inference::detect_frame;
 
 use crate::detection::{BoundingBox, detect_image};
+use crate::error::VideoInferenceError;
 use crate::onnx::{detect_input_shape, load_session};
 use crate::threading::{DetectionTask, detection_handler};
 use crate::video::{calc_interval_frames, get_decoder, init_video_rs};
+
+pub use error::VideoInferenceError as Error;
+pub type Result<T> = std::result::Result<T, VideoInferenceError>;
 
 /// All configuration options for `detect_video` bundled in one struct.
 ///
@@ -80,7 +84,7 @@ pub fn detect_video(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>, Error> {
+) -> Result<Vec<Vec<BoundingBox>>> {
     detect_video_multi_thread_keyframes(path_video, path_onnx, config)
 }
 
@@ -98,7 +102,7 @@ pub fn detect_video_single_thread(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>, Error> {
+) -> Result<Vec<Vec<BoundingBox>>> {
     init_video_rs();
 
     let mut session = load_session(path_onnx)?;
@@ -106,8 +110,17 @@ pub fn detect_video_single_thread(
     let mut decoder = get_decoder(path_video, size_onnx)?;
     let size_video = decoder.size();
 
-    let n_frames = decoder.frames()?;
-    let duration = decoder.duration()?.as_secs();
+    let n_frames = decoder.frames().map_err(|e| Error::Video {
+        detail: "Failed to determine number of frames!".to_string(),
+        source: e,
+    })?;
+    let duration = decoder
+        .duration()
+        .map_err(|e| Error::Video {
+            detail: "Failed to determine video duration!".to_string(),
+            source: e,
+        })?
+        .as_secs();
     let interval_frames = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
 
     let mut bboxes = Vec::new();
@@ -150,7 +163,7 @@ pub fn detect_video_multi_thread(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>, Error> {
+) -> Result<Vec<Vec<BoundingBox>>> {
     init_video_rs();
 
     let session = load_session(path_onnx)?;
@@ -158,8 +171,17 @@ pub fn detect_video_multi_thread(
     let mut decoder = get_decoder(path_video, size_onnx)?;
     let size_video = decoder.size();
 
-    let n_frames = decoder.frames()?;
-    let duration = decoder.duration()?.as_secs();
+    let n_frames = decoder.frames().map_err(|e| Error::Video {
+        detail: "Failed to determine number of frames!".to_string(),
+        source: e,
+    })?;
+    let duration = decoder
+        .duration()
+        .map_err(|e| Error::Video {
+            detail: "Failed to video duration!".to_string(),
+            source: e,
+        })?
+        .as_secs();
     let interval_frames = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
 
     // sync_channel used here for backpressure on the decoder loop
@@ -174,8 +196,9 @@ pub fn detect_video_multi_thread(
             if f % interval_frames == 0 {
                 debug!("{}/{}", f, n_frames);
                 let task = DetectionTask::new(frame);
-                tx.send(task)
-                    .map_err(|_| anyhow!("Failed: Detection thread dropped!"))?;
+                tx.send(task).map_err(|_| {
+                    Error::Thread("Failed to dispatch to detection thread!".to_string())
+                })?;
             }
         } else {
             break;
@@ -184,9 +207,9 @@ pub fn detect_video_multi_thread(
     debug!("decode video: {:?}", t.elapsed());
     // drop the last tx clone so rx knows when all senders are gone
     drop(tx);
-    let bboxes = handle
-        .join()
-        .map_err(|e| anyhow!("Detection thread paniced: {e:?}"))??;
+    let bboxes = handle.join().map_err(|_| {
+        Error::Thread("Failed to retrieve results from detection thread!".to_string())
+    })??;
     let dt = t.elapsed().as_secs_f32();
     debug!(
         "detect video: {:?} ({} frames, {} frames/sec)",
@@ -201,7 +224,7 @@ pub fn detect_video_multi_thread_keyframes(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>, Error> {
+) -> Result<Vec<Vec<BoundingBox>>> {
     init_video_rs();
 
     let session = load_session(path_onnx)?;
@@ -209,9 +232,18 @@ pub fn detect_video_multi_thread_keyframes(
     let mut decoder = get_decoder(path_video, size_onnx)?;
     let size_video = decoder.size();
 
-    let n_frames = decoder.frames()? as i64;
+    let n_frames = decoder.frames().map_err(|e| Error::Video {
+        detail: "Failed to determine number of frames!".to_string(),
+        source: e,
+    })? as i64;
 
-    let duration = decoder.duration()?.as_secs();
+    let duration = decoder
+        .duration()
+        .map_err(|e| Error::Video {
+            detail: "Failed to video duration!".to_string(),
+            source: e,
+        })?
+        .as_secs();
     let interval = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
     debug!("interval frames: {}", interval);
 
@@ -242,14 +274,14 @@ pub fn detect_video_multi_thread_keyframes(
         debug!("{} / {}", f, ts.as_secs());
         let task = DetectionTask::new(frame);
         tx.send(task)
-            .map_err(|_| anyhow!("Failed: Detection thread dropped!"))?;
+            .map_err(|_| Error::Thread("Failed to dispatch to detection thread!".to_string()))?;
     }
     debug!("decode video: {:?}", t.elapsed());
     // drop the last tx clone so rx knows when all senders are gone
     drop(tx);
-    let bboxes = handle
-        .join()
-        .map_err(|e| anyhow!("Detection thread paniced: {e:?}"))??;
+    let bboxes = handle.join().map_err(|_| {
+        Error::Thread("Failed to retrieve results from detection thread!".to_string())
+    })??;
     let dt = t.elapsed().as_secs_f32();
     debug!(
         "detect video: {:?} ({} frames, {} frames/sec)",
@@ -263,7 +295,7 @@ pub fn detect_video_multi_thread_keyframes(
 /// Run video-decoding frame by frame
 ///
 /// This is for testing purposes only to measures the decoder-runtime on different targets
-pub fn decode_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
+pub fn decode_video(path_video: impl AsRef<Path>) -> Result<()> {
     init_video_rs();
     let mut decoder = get_decoder(path_video, (640, 640))?;
     let t = time::Instant::now();
@@ -292,14 +324,14 @@ pub fn decode_video(path_video: impl AsRef<Path>) -> Result<(), Error> {
 /// Hopefully, this is significantly faster than sequential decoding when the desired
 /// interval is larger than the keyframe spacing, at the cost of frame-exact
 /// positioning.
-pub fn decode_video_keyframes(
-    path_video: impl AsRef<Path>,
-    interval: Option<usize>,
-) -> Result<(), Error> {
+pub fn decode_video_keyframes(path_video: impl AsRef<Path>, interval: Option<usize>) -> Result<()> {
     init_video_rs();
     let mut decoder = get_decoder(path_video, (640, 640))?;
     let t = time::Instant::now();
-    let n_frames = decoder.frames()? as i64;
+    let n_frames = decoder.frames().map_err(|e| Error::Video {
+        detail: "Failed to determine number of frames!".to_string(),
+        source: e,
+    })? as i64;
     let fps = decoder.frame_rate();
     let interval = interval.unwrap_or(50);
     let mut last_ts: f32 = -1.0;
