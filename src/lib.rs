@@ -13,7 +13,7 @@ mod vizualize;
 
 //use inference::detect_frame;
 
-use crate::detection::{BoundingBox, detect_image};
+use crate::detection::{Detection, detect_image};
 use crate::error::VideoInferenceError;
 use crate::onnx::{detect_input_shape, load_session};
 use crate::threading::{DetectionTask, detection_handler};
@@ -79,30 +79,29 @@ impl Default for DetectionConfig {
     }
 }
 
-/// Best Approach
-pub fn detect_video(
-    path_video: impl AsRef<Path>,
-    path_onnx: impl AsRef<Path>,
-    config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>> {
-    detect_video_multi_thread_keyframes(path_video, path_onnx, config)
-}
-
-/// Run video-detection on mp4-video
+/// Run video-detection on mp4-video. Defaults to the optimal approach.
 ///
 /// # Example
 /// ```
 /// use video_inference::{DetectionConfig, detect_video};
-/// let config = DetectionConfig {interval: Some(1.0), ..Default::default()};
+/// let config = DetectionConfig {interval: Some(4.7), ..Default::default()};
 /// let path_video = "./tests/assets/video.mp4";
 /// let path_onnx = "./tests/assets/model.onnx";
-/// let bboxes = detect_video(path_video, path_onnx, &config)?;
+/// let detections = detect_video(path_video, path_onnx, &config)?;
 /// ```
+pub fn detect_video(
+    path_video: impl AsRef<Path>,
+    path_onnx: impl AsRef<Path>,
+    config: &DetectionConfig,
+) -> Result<Vec<Detection>> {
+    detect_video_multi_thread_keyframes(path_video, path_onnx, config)
+}
+
 pub fn detect_video_single_thread(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>> {
+) -> Result<Vec<Detection>> {
     init_video_rs();
 
     let mut session = load_session(path_onnx)?;
@@ -123,15 +122,15 @@ pub fn detect_video_single_thread(
         .as_secs();
     let interval_frames = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
 
-    let mut bboxes = Vec::new();
+    let mut detections = Vec::new();
     let t = time::Instant::now();
     for (f, next_frame) in decoder.decode_iter().enumerate() {
         if let Ok((_ts, frame)) = next_frame {
             if f % interval_frames == 0 {
                 debug!("{}/{}", f, n_frames);
-                let bboxes_frame =
-                    detect_image(&mut session, frame, config, size_video, size_onnx, Some(f as u32))?;
-                bboxes.push(bboxes_frame);
+                let detection =
+                    detect_image(&mut session, frame, config, size_video, size_onnx, f as u32)?;
+                detections.push(detection);
             }
         } else {
             break;
@@ -141,10 +140,10 @@ pub fn detect_video_single_thread(
     debug!(
         "decode+detect video: {:?} ({} frames, {} frames/sec)",
         dt,
-        bboxes.len(),
-        (bboxes.len() as f32 / dt)
+        detections.len(),
+        (detections.len() as f32 / dt)
     );
-    Ok(bboxes)
+    Ok(detections)
 }
 
 /// Run video-detection multi-threaded
@@ -157,13 +156,13 @@ pub fn detect_video_single_thread(
 /// let config = DetectionConfig {interval: Some(1.0), ..Default::default()};
 /// let path_video = "./tests/assets/video.mp4";
 /// let path_onnx = "./tests/assets/model.onnx";
-/// let bboxes = detect_video_multithread(path_video, path_onnx, &config)?;
+/// let detections = detect_video_multithread(path_video, path_onnx, &config)?;
 /// ```
 pub fn detect_video_multi_thread(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>> {
+) -> Result<Vec<Detection>> {
     init_video_rs();
 
     let session = load_session(path_onnx)?;
@@ -195,7 +194,7 @@ pub fn detect_video_multi_thread(
         if let Ok((_ts, frame)) = next_frame {
             if f % interval_frames == 0 {
                 debug!("{}/{}", f, n_frames);
-                let task = DetectionTask::new(frame, Some(f as u32));
+                let task = DetectionTask::new(frame, f as u32);
                 tx.send(task).map_err(|_| {
                     Error::Thread("Failed to dispatch to detection thread!".to_string())
                 })?;
@@ -207,24 +206,24 @@ pub fn detect_video_multi_thread(
     debug!("decode video: {:?}", t.elapsed());
     // drop the last tx clone so rx knows when all senders are gone
     drop(tx);
-    let bboxes = handle.join().map_err(|_| {
+    let detections = handle.join().map_err(|_| {
         Error::Thread("Failed to retrieve results from detection thread!".to_string())
     })??;
     let dt = t.elapsed().as_secs_f32();
     debug!(
         "detect video: {:?} ({} frames, {} frames/sec)",
         dt,
-        bboxes.len(),
-        (bboxes.len() as f32 / dt)
+        detections.len(),
+        (detections.len() as f32 / dt)
     );
-    Ok(bboxes)
+    Ok(detections)
 }
 
 pub fn detect_video_multi_thread_keyframes(
     path_video: impl AsRef<Path>,
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
-) -> Result<Vec<Vec<BoundingBox>>> {
+) -> Result<Vec<Detection>> {
     init_video_rs();
 
     let session = load_session(path_onnx)?;
@@ -272,24 +271,24 @@ pub fn detect_video_multi_thread_keyframes(
         }
         last_ts = ts.as_secs();
         debug!("{} / {}", f, ts.as_secs());
-        let task = DetectionTask::new(frame, Some(f as u32));
+        let task = DetectionTask::new(frame, f as u32);
         tx.send(task)
             .map_err(|_| Error::Thread("Failed to dispatch to detection thread!".to_string()))?;
     }
     debug!("decode video: {:?}", t.elapsed());
     // drop the last tx clone so rx knows when all senders are gone
     drop(tx);
-    let bboxes = handle.join().map_err(|_| {
+    let detections = handle.join().map_err(|_| {
         Error::Thread("Failed to retrieve results from detection thread!".to_string())
     })??;
     let dt = t.elapsed().as_secs_f32();
     debug!(
         "detect video: {:?} ({} frames, {} frames/sec)",
         dt,
-        bboxes.len(),
-        (bboxes.len() as f32 / dt)
+        detections.len(),
+        (detections.len() as f32 / dt)
     );
-    Ok(bboxes)
+    Ok(detections)
 }
 
 /// Run video-decoding frame by frame
