@@ -1,6 +1,6 @@
 [package]
 name = "video-inference"
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 description = "Run ONNX object-detection models on video frames with hardware-accelerated decoding and inference"
 license = "MIT"
