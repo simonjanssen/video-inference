@@ -19,6 +19,8 @@ use crate::onnx::{detect_input_shape, load_session};
 use crate::threading::{DetectionTask, detection_handler};
 use crate::video::{calc_interval_frames, get_decoder, init_video_rs};
 
+pub use video::test_available_devices;
+
 pub use error::VideoInferenceError as Error;
 pub type Result<T> = std::result::Result<T, VideoInferenceError>;
 

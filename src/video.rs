@@ -1,6 +1,6 @@
 use std::path::Path;
 use std::sync::Once;
-use tracing::debug;
+use tracing::{debug, error, warn};
 use video_rs::{Decoder, DecoderBuilder, hwaccel::HardwareAccelerationDeviceType};
 
 use crate::{Result, error::VideoInferenceError};
@@ -45,6 +45,35 @@ pub(crate) fn get_decoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<De
     })?;
     debug!("video has size {:?}", decoder.size());
     Ok(decoder)
+}
+
+/// Test available Hardware-Acceleration Device Types
+///
+/// Using an input video verify whether the claimed devices actually work.
+pub fn test_available_devices(path: impl AsRef<Path>) {
+    let devices = HardwareAccelerationDeviceType::list_available();
+    if devices.is_empty() {
+        warn!("no devices for video decoder found!");
+        return;
+    }
+    debug!("available devices: {:?}", devices);
+    for device in devices {
+        match DecoderBuilder::new(path.as_ref().to_path_buf())
+            .with_hardware_acceleration(device)
+            .build()
+        {
+            Ok(decoder) => {
+                let _ = decoder.size();
+                debug!("video decoder sucessfully built with `{:?}` device", device);
+            }
+            Err(e) => {
+                error!(
+                    "failed to build video decoder with `{:?}` (error: {})",
+                    device, e
+                );
+            }
+        }
+    }
 }
 
 // pub(crate) fn debug_decoder(decoder: &Decoder) -> Result<(), Error> {
