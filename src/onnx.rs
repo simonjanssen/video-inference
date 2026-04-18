@@ -13,7 +13,10 @@ pub(crate) fn load_session(path_onnx: impl AsRef<Path>) -> Result<Session> {
             source: e,
         })?
         .with_optimization_level(GraphOptimizationLevel::Level3)
-        .unwrap()
+        .map_err(|e| VideoInferenceError::Onnx {
+            detail: "Failed to apply graph optimization!".to_string(),
+            source: e.into(),
+        })?
         .with_intra_threads(4)
         .map_err(|e| VideoInferenceError::Onnx {
             detail: "Failed to finalize ONNX runtime session!".to_string(),
@@ -27,7 +30,10 @@ pub(crate) fn load_session(path_onnx: impl AsRef<Path>) -> Result<Session> {
             .with_execution_providers([CoreML::default()
                 .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
                 .build()])
-            .unwrap();
+            .map_err(|e| VideoInferenceError::Onnx {
+                detail: "Failed to load execution provider!".to_string(),
+                source: e.into(),
+            })?;
     }
 
     let session = builder
