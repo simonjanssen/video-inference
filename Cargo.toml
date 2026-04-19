@@ -25,6 +25,7 @@ serde = { version = "1.0.228", features = ["derive"], optional = true }
 ab_glyph = { version = "0.2.32", optional = true }
 image = { version = "0.25.10", optional = true }
 imageproc = { version = "0.26.1", optional = true }
+dirs = "6"
 thiserror = "2.0.18"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]

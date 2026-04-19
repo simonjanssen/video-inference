@@ -26,9 +26,14 @@ pub(crate) fn load_session(path_onnx: impl AsRef<Path>) -> Result<Session> {
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         use ort::ep::CoreML;
+        let cache_dir = dirs::cache_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("video-inference")
+            .join("coreml_cache");
         builder = builder
             .with_execution_providers([CoreML::default()
                 .with_compute_units(ort::ep::coreml::ComputeUnits::CPUAndNeuralEngine)
+                .with_model_cache_dir(cache_dir.to_string_lossy())
                 .build()])
             .map_err(|e| VideoInferenceError::Onnx {
                 detail: "Failed to load `CoreML` execution provider!".to_string(),
