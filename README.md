@@ -36,6 +36,9 @@ fn main() -> Result<(), Error> {
 
 See the [examples](./examples/) directory for more usage patterns.
 
+## Profiling
+
+Please read the [profiling setup guide](./.github/skills/profiling-setup/) for examples.
 
 ## Troubleshooting
 
