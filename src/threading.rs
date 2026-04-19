@@ -1,8 +1,8 @@
 use ndarray::Array3;
-use ort::session::Session;
 use std::sync::mpsc::Receiver;
 
 use crate::DetectionConfig;
+use crate::Model;
 use crate::Result;
 use crate::detection::Detection;
 use crate::detection::detect_image;
@@ -20,19 +20,18 @@ impl DetectionTask {
 
 pub(crate) fn detection_handler(
     rx: Receiver<DetectionTask>,
-    mut session: Session,
+    model: &mut Model,
     config: DetectionConfig,
     size_video: (u32, u32),
-    size_onnx: (u32, u32),
 ) -> Result<Vec<Detection>> {
     let mut detections = Vec::new();
     while let Ok(task) = rx.recv() {
         let detection = detect_image(
-            &mut session,
+            &mut model.session,
             task.frame,
             &config,
             size_video,
-            size_onnx,
+            model.size,
             task.frame_idx,
         )?;
         detections.push(detection);
