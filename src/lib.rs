@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::sync_channel;
 use std::{thread, time};
+use ort::session::Session;
 use tracing::debug;
 
 pub mod detection;
@@ -81,6 +82,17 @@ impl Default for DetectionConfig {
     }
 }
 
+pub struct Model {
+    session: Session,
+    size: (u32, u32),
+}
+
+pub fn load_model(path_onnx: impl AsRef<Path>, config: &DetectionConfig) -> Result<Model> {
+    let session = load_session(path_onnx)?;
+    let size = detect_input_shape(&session, Some(config.input_tensor_name.as_ref()))?;
+    Ok(Model { session, size })
+}
+
 /// Run video-detection on mp4-video. Defaults to the optimal approach.
 ///
 /// # Example
@@ -96,7 +108,28 @@ pub fn detect_video(
     path_onnx: impl AsRef<Path>,
     config: &DetectionConfig,
 ) -> Result<Vec<Detection>> {
-    detect_video_multi_thread_keyframes(path_video, path_onnx, config)
+    let mut model = load_model(path_onnx, config)?;
+    detect_video_multi_thread_keyframes(path_video, &mut model, config)
+}
+
+/// Run video-detection on mp4-video. Defaults to the optimal approach.
+///
+/// This variant allows the caller to externally initialize the model.
+/// This might be beneficial if running on multiple videos with the same model.
+/// ```
+/// use video_inference::{DetectionConfig, load_model, detect_video};
+/// let config = DetectionConfig {interval: Some(4.7), ..Default::default()};
+/// let path_video = "./tests/assets/video.mp4";
+/// let path_onnx = "./tests/assets/model.onnx";
+/// let mut model = load_model(path_onnx, config)?;
+/// let detections = detect_video_with_model(path_video, &mut model, &config)?;
+/// ```
+pub fn detect_video_with_model(
+    path_video: impl AsRef<Path>,
+    model: &mut Model,
+    config: &DetectionConfig,
+) -> Result<Vec<Detection>> {
+    detect_video_multi_thread_keyframes(path_video, model, config)
 }
 
 pub fn detect_video_single_thread(
@@ -162,14 +195,12 @@ pub fn detect_video_single_thread(
 /// ```
 pub fn detect_video_multi_thread(
     path_video: impl AsRef<Path>,
-    path_onnx: impl AsRef<Path>,
+    model: &mut Model,
     config: &DetectionConfig,
 ) -> Result<Vec<Detection>> {
     init_video_rs();
 
-    let session = load_session(path_onnx)?;
-    let size_onnx = detect_input_shape(&session, Some("images"))?;
-    let mut decoder = get_decoder(path_video, size_onnx)?;
+    let mut decoder = get_decoder(path_video, model.size)?;
     let size_video = decoder.size();
 
     let n_frames = decoder.frames().map_err(|e| Error::Video {
@@ -188,49 +219,57 @@ pub fn detect_video_multi_thread(
     // sync_channel used here for backpressure on the decoder loop
     let (tx, rx) = sync_channel::<DetectionTask>(15);
     let config_inner = config.clone();
-    let handle =
-        thread::spawn(move || detection_handler(rx, session, config_inner, size_video, size_onnx));
 
-    let t = time::Instant::now();
-    for (f, next_frame) in decoder.decode_iter().enumerate() {
-        if let Ok((_ts, frame)) = next_frame {
-            if f % interval_frames == 0 {
-                debug!("{}/{}", f, n_frames);
-                let task = DetectionTask::new(frame, f as u32);
-                tx.send(task).map_err(|_| {
-                    Error::Thread("Failed to dispatch to detection thread!".to_string())
-                })?;
+    // thread::scope (not thread::spawn) so we can borrow `&mut Model` into
+    // the spawned thread. Scoped threads are guaranteed to join before the
+    // scope exits, so the borrow checker accepts non-'static references.
+    // Rc/Arc wouldn't help: Rc is !Send, and Arc<Mutex<Session>> would just
+    // serialize inference behind a lock — no better than a plain &mut.
+    let detections = thread::scope(|s| {
+        let handle = s.spawn(|| detection_handler(rx, model, config_inner, size_video));
+
+        let t = time::Instant::now();
+        for (f, next_frame) in decoder.decode_iter().enumerate() {
+            if let Ok((_ts, frame)) = next_frame {
+                if f % interval_frames == 0 {
+                    debug!("{}/{}", f, n_frames);
+                    let task = DetectionTask::new(frame, f as u32);
+                    tx.send(task).map_err(|_| {
+                        Error::Thread("Failed to dispatch to detection thread!".to_string())
+                    })?;
+                }
+            } else {
+                break;
             }
-        } else {
-            break;
         }
-    }
-    debug!("decode video: {:?}", t.elapsed());
-    // drop the last tx clone so rx knows when all senders are gone
-    drop(tx);
-    let detections = handle.join().map_err(|_| {
-        Error::Thread("Failed to retrieve results from detection thread!".to_string())
-    })??;
-    let dt = t.elapsed().as_secs_f32();
-    debug!(
-        "detect video: {:?} ({} frames, {} frames/sec)",
-        dt,
-        detections.len(),
-        (detections.len() as f32 / dt)
-    );
+        debug!("decode video: {:?}", t.elapsed());
+        // drop the last tx clone so rx knows when all senders are gone
+        drop(tx);
+        let detections = handle.join().map_err(|_| {
+            Error::Thread("Failed to retrieve results from detection thread!".to_string())
+        })??;
+        let dt = t.elapsed().as_secs_f32();
+        debug!(
+            "detect video: {:?} ({} frames, {} frames/sec)",
+            dt,
+            detections.len(),
+            (detections.len() as f32 / dt)
+        );
+        Ok(detections)
+    })?;
     Ok(detections)
 }
 
 pub fn detect_video_multi_thread_keyframes(
     path_video: impl AsRef<Path>,
-    path_onnx: impl AsRef<Path>,
+    model: &mut Model,
     config: &DetectionConfig,
 ) -> Result<Vec<Detection>> {
     init_video_rs();
 
-    let session = load_session(path_onnx)?;
-    let size_onnx = detect_input_shape(&session, Some("images"))?;
-    let mut decoder = get_decoder(path_video, size_onnx)?;
+    //let session = load_session(path_onnx)?;
+    //let size_onnx = detect_input_shape(&session, Some("images"))?;
+    let mut decoder = get_decoder(path_video, model.size)?;
     let size_video = decoder.size();
 
     let n_frames = decoder.frames().map_err(|e| Error::Video {
@@ -253,43 +292,51 @@ pub fn detect_video_multi_thread_keyframes(
     // sync_channel used here for backpressure on the decoder loop
     let (tx, rx) = sync_channel::<DetectionTask>(15);
     let config_inner = config.clone();
-    let handle =
-        thread::spawn(move || detection_handler(rx, session, config_inner, size_video, size_onnx));
 
-    let t = time::Instant::now();
-    let mut last_ts: f32 = -1.0;
-    for f in (0i64..n_frames).step_by(interval) {
-        let target_ms = (f as f64 / fps as f64 * 1000.0) as i64;
-        let Ok(()) = decoder.seek(target_ms) else {
-            break;
-        };
-        let Ok((ts, frame)) = decoder.decode() else {
-            break;
-        };
-        // skip if seek landed on the same keyframe as last iteration
-        if ts.as_secs() == last_ts {
-            debug!("skipping previous keyframe");
-            continue;
+    // thread::scope (not thread::spawn) so we can borrow `&mut Model` into
+    // the spawned thread. Scoped threads are guaranteed to join before the
+    // scope exits, so the borrow checker accepts non-'static references.
+    // Rc/Arc wouldn't help: Rc is !Send, and Arc<Mutex<Session>> would just
+    // serialize inference behind a lock — no better than a plain &mut.
+    let detections = thread::scope(|s| {
+        let handle = s.spawn(|| detection_handler(rx, model, config_inner, size_video));
+
+        let t = time::Instant::now();
+        let mut last_ts: f32 = -1.0;
+        for f in (0i64..n_frames).step_by(interval) {
+            let target_ms = (f as f64 / fps as f64 * 1000.0) as i64;
+            let Ok(()) = decoder.seek(target_ms) else {
+                break;
+            };
+            let Ok((ts, frame)) = decoder.decode() else {
+                break;
+            };
+            // skip if seek landed on the same keyframe as last iteration
+            if ts.as_secs() == last_ts {
+                debug!("skipping previous keyframe");
+                continue;
+            }
+            last_ts = ts.as_secs();
+            debug!("{} / {}", f, ts.as_secs());
+            let task = DetectionTask::new(frame, f as u32);
+            tx.send(task)
+                .map_err(|_| Error::Thread("Failed to dispatch to detection thread!".to_string()))?;
         }
-        last_ts = ts.as_secs();
-        debug!("{} / {}", f, ts.as_secs());
-        let task = DetectionTask::new(frame, f as u32);
-        tx.send(task)
-            .map_err(|_| Error::Thread("Failed to dispatch to detection thread!".to_string()))?;
-    }
-    debug!("decode video: {:?}", t.elapsed());
-    // drop the last tx clone so rx knows when all senders are gone
-    drop(tx);
-    let detections = handle.join().map_err(|_| {
-        Error::Thread("Failed to retrieve results from detection thread!".to_string())
-    })??;
-    let dt = t.elapsed().as_secs_f32();
-    debug!(
-        "detect video: {:?} ({} frames, {} frames/sec)",
-        dt,
-        detections.len(),
-        (detections.len() as f32 / dt)
-    );
+        debug!("decode video: {:?}", t.elapsed());
+        // drop the last tx clone so rx knows when all senders are gone
+        drop(tx);
+        let detections = handle.join().map_err(|_| {
+            Error::Thread("Failed to retrieve results from detection thread!".to_string())
+        })??;
+        let dt = t.elapsed().as_secs_f32();
+        debug!(
+            "detect video: {:?} ({} frames, {} frames/sec)",
+            dt,
+            detections.len(),
+            (detections.len() as f32 / dt)
+        );
+        Ok(detections)
+    })?;
     Ok(detections)
 }
 

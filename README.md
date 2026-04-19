@@ -35,3 +35,11 @@ fn main() -> Result<(), Error> {
 ```
 
 See the [examples](./examples/) directory for more usage patterns.
+
+## Profiling
+
+Please read the [profiling setup guide](./.github/skills/profiling-setup/) for examples.
+
+## Troubleshooting
+
+Specifically for `linux/cuda` [execution providers](https://ort.pyke.io/perf/execution-providers) issues there's a [skill-formatted guide](./.github/skills/cuda-setup/) with instructions that turned out to be helpful for my own setup.
