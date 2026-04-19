@@ -1,18 +1,16 @@
-use std::path::{Path, PathBuf};
+use ort::session::Session;
+use std::path::Path;
 use std::sync::mpsc::sync_channel;
 use std::{thread, time};
-use ort::session::Session;
 use tracing::debug;
 
+#[cfg(feature = "annotate")]
+mod annotate;
 pub mod detection;
 mod error;
 mod onnx;
 mod threading;
 mod video;
-#[cfg(feature = "visualize")]
-mod vizualize;
-
-//use inference::detect_frame;
 
 use crate::detection::{Detection, detect_image};
 use crate::error::VideoInferenceError;
@@ -58,9 +56,6 @@ pub struct DetectionConfig {
     /// - Defaults to None (run detection on all frames)
     pub interval: Option<f32>,
 
-    /// Output path for annotated video (requires `visualize` feature)
-    pub path_output: Option<PathBuf>,
-
     /// ONNX-model image input tensor name
     pub input_tensor_name: String,
 
@@ -77,7 +72,6 @@ impl Default for DetectionConfig {
             interval: None,
             input_tensor_name: "images".to_string(),
             output_tensor_name: "output0".to_string(),
-            path_output: None,
         }
     }
 }
@@ -141,7 +135,7 @@ pub fn detect_video_single_thread(
 
     let mut session = load_session(path_onnx)?;
     let size_onnx = detect_input_shape(&session, Some("images"))?;
-    let mut decoder = get_decoder(path_video, size_onnx)?;
+    let mut decoder = get_decoder(path_video, Some(size_onnx))?;
     let size_video = decoder.size();
 
     let n_frames = decoder.frames().map_err(|e| Error::Video {
@@ -200,7 +194,7 @@ pub fn detect_video_multi_thread(
 ) -> Result<Vec<Detection>> {
     init_video_rs();
 
-    let mut decoder = get_decoder(path_video, model.size)?;
+    let mut decoder = get_decoder(path_video, Some(model.size))?;
     let size_video = decoder.size();
 
     let n_frames = decoder.frames().map_err(|e| Error::Video {
@@ -269,7 +263,7 @@ pub fn detect_video_multi_thread_keyframes(
 
     //let session = load_session(path_onnx)?;
     //let size_onnx = detect_input_shape(&session, Some("images"))?;
-    let mut decoder = get_decoder(path_video, model.size)?;
+    let mut decoder = get_decoder(path_video, Some(model.size))?;
     let size_video = decoder.size();
 
     let n_frames = decoder.frames().map_err(|e| Error::Video {
@@ -319,8 +313,9 @@ pub fn detect_video_multi_thread_keyframes(
             last_ts = ts.as_secs();
             debug!("{} / {}", f, ts.as_secs());
             let task = DetectionTask::new(frame, f as u32);
-            tx.send(task)
-                .map_err(|_| Error::Thread("Failed to dispatch to detection thread!".to_string()))?;
+            tx.send(task).map_err(|_| {
+                Error::Thread("Failed to dispatch to detection thread!".to_string())
+            })?;
         }
         debug!("decode video: {:?}", t.elapsed());
         // drop the last tx clone so rx knows when all senders are gone
@@ -345,7 +340,7 @@ pub fn detect_video_multi_thread_keyframes(
 /// This is for testing purposes only to measures the decoder-runtime on different targets
 pub fn decode_video(path_video: impl AsRef<Path>) -> Result<()> {
     init_video_rs();
-    let mut decoder = get_decoder(path_video, (640, 640))?;
+    let mut decoder = get_decoder(path_video, None)?;
     let t = time::Instant::now();
     //let mut tf = time::Instant::now();
     for (f, next_frame) in decoder.decode_iter().enumerate() {
@@ -374,7 +369,7 @@ pub fn decode_video(path_video: impl AsRef<Path>) -> Result<()> {
 /// positioning.
 pub fn decode_video_keyframes(path_video: impl AsRef<Path>, interval: Option<usize>) -> Result<()> {
     init_video_rs();
-    let mut decoder = get_decoder(path_video, (640, 640))?;
+    let mut decoder = get_decoder(path_video, None)?;
     let t = time::Instant::now();
     let n_frames = decoder.frames().map_err(|e| Error::Video {
         detail: "Failed to determine number of frames!".to_string(),
@@ -400,5 +395,85 @@ pub fn decode_video_keyframes(path_video: impl AsRef<Path>, interval: Option<usi
         debug!("{} / {}", f, ts.as_secs());
     }
     debug!("decode video: {:?}", t.elapsed());
+    Ok(())
+}
+
+#[cfg(feature = "annotate")]
+pub fn annotate_video(
+    path_video: impl AsRef<Path>,
+    detections: &[Detection],
+    config: &DetectionConfig,
+    path_output: impl AsRef<Path>,
+) -> Result<()> {
+    use crate::annotate::draw_bboxes_arr;
+    use crate::video::get_encoder;
+    use std::collections::HashMap;
+    init_video_rs();
+
+    let mut detections_map = HashMap::with_capacity(detections.len());
+    for detection in detections {
+        detections_map.insert(detection.frame_idx, &detection.bboxes);
+    }
+
+    let mut decoder = get_decoder(path_video, None)?;
+    let size_video = decoder.size();
+
+    let n_frames = decoder.frames().map_err(|e| Error::Video {
+        detail: "Failed to determine number of frames!".to_string(),
+        source: e,
+    })? as i64;
+
+    let duration = decoder
+        .duration()
+        .map_err(|e| Error::Video {
+            detail: "Failed to video duration!".to_string(),
+            source: e,
+        })?
+        .as_secs();
+    let interval = calc_interval_frames(duration, n_frames as u32, config.interval) as usize;
+    debug!("interval frames: {}", interval);
+
+    let fps = decoder.frame_rate();
+
+    let mut encoder = get_encoder(path_output, size_video)?;
+
+    let t = time::Instant::now();
+    let mut last_ts: f32 = -1.0;
+    for f in (0i64..n_frames).step_by(interval) {
+        let target_ms = (f as f64 / fps as f64 * 1000.0) as i64;
+        let Ok(()) = decoder.seek(target_ms) else {
+            break;
+        };
+        let Ok((ts, frame)) = decoder.decode() else {
+            break;
+        };
+        // skip if seek landed on the same keyframe as last iteration
+        if ts.as_secs() == last_ts {
+            debug!("skipping previous keyframe");
+            continue;
+        }
+
+        // draw bboxes
+        let frame_idx = f as u32;
+        let bboxes = detections_map
+            .get(&frame_idx)
+            .ok_or(VideoInferenceError::Io("Missing detection".to_string()))?;
+        let annotated = draw_bboxes_arr(frame.clone(), bboxes)?;
+        encoder
+            .encode(&annotated, ts)
+            .map_err(|e| VideoInferenceError::Video {
+                detail: "Failed to encode annotated frame!".to_string(),
+                source: e,
+            })?;
+
+        last_ts = ts.as_secs();
+        debug!("{} / {}", f, ts.as_secs());
+    }
+    encoder.finish().map_err(|e| VideoInferenceError::Video {
+        detail: "Failed to finalize annotated video!".to_string(),
+        source: e,
+    })?;
+    debug!("annotate video: {:?}", t.elapsed());
+
     Ok(())
 }

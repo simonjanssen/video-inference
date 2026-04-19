@@ -78,6 +78,6 @@ pub(crate) fn img_to_arr3(img: &DynamicImage) -> Result<Array3<u8>> {
     let (width, height) = rgb.dimensions();
     let raw = rgb.into_raw(); // Vec<u8>, length = height * width * 3
     let arr3 = Array3::from_shape_vec((height as usize, width as usize, 3), raw)
-        .map_err(|e| VideoInferenceError::Io("Failed to load image as array!".to_string()))?;
+        .map_err(|_e| VideoInferenceError::Io("Failed to load image as array!".to_string()))?;
     Ok(arr3)
 }
