@@ -1,6 +1,6 @@
 [package]
 name = "video-inference"
-version = "0.0.4"
+version = "0.0.5"
 edition = "2024"
 description = "Run ONNX object-detection models on video frames with hardware-accelerated decoding and inference"
 license = "MIT"
@@ -13,7 +13,7 @@ rust-version = "1.85"
 
 [features]
 default = []
-visualize = ["ab_glyph", "image", "imageproc"]
+annotate = ["ab_glyph", "image", "imageproc"]
 serde = ["dep:serde"]
 
 [dependencies]

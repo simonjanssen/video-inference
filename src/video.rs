@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::sync::Once;
 use tracing::{debug, error, warn};
+#[cfg(feature = "annotate")]
+use video_rs::Encoder;
 use video_rs::{Decoder, DecoderBuilder, hwaccel::HardwareAccelerationDeviceType};
 
 use crate::{Result, error::VideoInferenceError};
@@ -28,17 +30,21 @@ pub(crate) fn calc_interval_frames(duration: f32, frames: u32, interval: Option<
 
 /// Initialize video_rs::Decoder with fitting output frame size for ONNX-inference.
 /// Also applies hardware acceleration if available.
-pub(crate) fn get_decoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<Decoder> {
-    let (w, h) = size;
+pub(crate) fn get_decoder(path: impl AsRef<Path>, size: Option<(u32, u32)>) -> Result<Decoder> {
     let devices = HardwareAccelerationDeviceType::list_available();
     debug!("available devices: {:?}", devices);
-    let mut builder =
-        DecoderBuilder::new(path.as_ref().to_path_buf()).with_resize(video_rs::Resize::Exact(w, h));
+    let mut builder = DecoderBuilder::new(path.as_ref().to_path_buf());
+    if let Some((w, h)) = size {
+        builder = builder.with_resize(video_rs::Resize::Exact(w, h));
+        debug!("resizing video to {} x {}", w, h);
+    };
+
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     {
         builder = builder.with_hardware_acceleration(HardwareAccelerationDeviceType::VideoToolbox);
         debug!("using `VideoToolbox` hardware acceleration for video decoding");
     }
+
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     {
         if devices.contains(&HardwareAccelerationDeviceType::Cuda) {
@@ -101,3 +107,20 @@ pub fn test_available_devices(path: impl AsRef<Path>) {
 //     );
 //     Ok(())
 // }
+
+#[cfg(feature = "annotate")]
+pub(crate) fn get_encoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<Encoder> {
+    let (w, h) = size;
+    let settings = {
+        use video_rs::encode::Settings;
+        Settings::preset_h264_yuv420p(w as usize, h as usize, false)
+    };
+    let encoder =
+        video_rs::encode::Encoder::new(path.as_ref().to_path_buf(), settings).map_err(|e| {
+            VideoInferenceError::Video {
+                detail: "Failed to load encoder!".to_string(),
+                source: e,
+            }
+        })?;
+    Ok(encoder)
+}
