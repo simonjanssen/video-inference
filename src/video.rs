@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::Once;
 use tracing::{debug, error, warn};
+#[cfg(feature = "annotate")]
 use video_rs::Encoder;
 use video_rs::{Decoder, DecoderBuilder, hwaccel::HardwareAccelerationDeviceType};
 
@@ -107,6 +108,7 @@ pub fn test_available_devices(path: impl AsRef<Path>) {
 //     Ok(())
 // }
 
+#[cfg(feature = "annotate")]
 pub(crate) fn get_encoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<Encoder> {
     let (w, h) = size;
     let settings = {

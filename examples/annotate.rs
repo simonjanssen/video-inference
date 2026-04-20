@@ -18,7 +18,7 @@ fn main() -> Result<(), Error> {
     let path_onnx = "./tests/assets/model.onnx";
     let path_output = "./video_ann.mp4";
     let detections = detect_video(path_video, path_onnx, &config)?;
-    let detections = annotate_video(path_video, &detections, &config, path_output)?;
+    annotate_video(path_video, &detections, &config, path_output)?;
     let file = std::fs::File::create("./tests/assets/video_ann.json")?;
     let writer = std::io::BufWriter::new(file);
     serde_json::to_writer_pretty(writer, &detections)?;
