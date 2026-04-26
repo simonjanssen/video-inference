@@ -101,6 +101,24 @@ impl BoundingBox {
         }
     }
 
+    pub fn from_array_6(array: ArrayView1<f32>, frame_idx: Option<u32>) -> Self {
+        let slice = array.as_slice().unwrap();
+        let [x1, y1, x2, y2, score, class_idx]: [f32; 6] = slice
+            .try_into()
+            .expect("array must have exactly 6 elements");
+        assert!(x1 < x2);
+        assert!(y1 < y2);
+        Self {
+            x1,
+            y1,
+            x2,
+            y2,
+            score,
+            class_idx: class_idx as i32,
+            frame_idx,
+        }
+    }
+
     pub fn scale(&mut self, scale_w: f32, scale_h: f32) {
         self.x1 *= scale_w;
         self.y1 *= scale_h;
@@ -184,29 +202,44 @@ pub(crate) fn extract_bboxes(
             detail: "Failed to extract detection results".to_string(),
             source: e,
         })?;
-    let view_candidates = output.slice(s![0, 4.., ..]);
-    let mask_candidates: Vec<bool> = view_candidates
-        .axis_iter(Axis(1))
-        .map(|col| col.iter().cloned().fold(f32::NEG_INFINITY, f32::max) > config.conf_thres)
-        .collect();
-    let idx_candidates: Vec<usize> = mask_candidates
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &keep)| if keep { Some(i) } else { None })
-        .collect();
-    let candidates_image = output.select(Axis(2), &idx_candidates);
-    // Remove only the batch dim; squeeze() would collapse a single-candidate axis and panic
-    let candidates_image = candidates_image.index_axis(Axis(0), 0);
-    //let mut bboxes = Vec::new();
-    let mut bboxes: Vec<BoundingBox> = Vec::with_capacity(candidates_image.len_of(Axis(1)));
-    for candidate in candidates_image.axis_iter(Axis(1)) {
-        let bbox = BoundingBox::from_array(
-            candidate.to_shape(candidate.len()).unwrap().view(),
-            Some(frame_idx),
-        );
-        bboxes.push(bbox);
-    }
-    let mut bboxes = nms(&bboxes, config.iou_thres);
+    let mut bboxes = match output.shape() {
+        [1, 300, 6] => {
+            let predictions = output.squeeze();
+            predictions
+                .rows()
+                .into_iter()
+                .map(|p| BoundingBox::from_array_6(p, Some(frame_idx)))
+                .filter(|b| b.score >= 0.25)
+                .collect()
+        }
+        _ => {
+            let view_candidates = output.slice(s![0, 4.., ..]);
+            let mask_candidates: Vec<bool> = view_candidates
+                .axis_iter(Axis(1))
+                .map(|col| {
+                    col.iter().cloned().fold(f32::NEG_INFINITY, f32::max) > config.conf_thres
+                })
+                .collect();
+            let idx_candidates: Vec<usize> = mask_candidates
+                .iter()
+                .enumerate()
+                .filter_map(|(i, &keep)| if keep { Some(i) } else { None })
+                .collect();
+            let candidates_image = output.select(Axis(2), &idx_candidates);
+            // Remove only the batch dim; squeeze() would collapse a single-candidate axis and panic
+            let candidates_image = candidates_image.index_axis(Axis(0), 0);
+            //let mut bboxes = Vec::new();
+            let mut bboxes: Vec<BoundingBox> = Vec::with_capacity(candidates_image.len_of(Axis(1)));
+            for candidate in candidates_image.axis_iter(Axis(1)) {
+                let bbox = BoundingBox::from_array(
+                    candidate.to_shape(candidate.len()).unwrap().view(),
+                    Some(frame_idx),
+                );
+                bboxes.push(bbox);
+            }
+            nms(&bboxes, config.iou_thres)
+        }
+    };
     bboxes.truncate(config.max_detect); // keep only max detections
     if let Some((scale_w, scale_h)) = scale {
         for bbox in &mut bboxes {
