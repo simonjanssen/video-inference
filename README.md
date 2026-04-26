@@ -5,6 +5,13 @@
 ## Setup
 This crate relies on [`video-rs`](https://lib.rs/crates/video-rs) for mp4-video decoding which in turn requires [`rust-ffmpeg` dependencies](https://github.com/zmwangx/rust-ffmpeg/wiki/Notes-on-building#dependencies) to be installed at build time.
 
+Specifically on Raspberry Pi, the following packages are required (or just follow the compiler hints when trying for the first time):
+```bash
+apt install libssl-dev \
+    && libavutil-dev libavformat-dev libavfilter-dev libavdevice-dev \
+    && libclang-dev
+```
+
 Add this crate as a dependency to your `Cargo.toml`:
 ```toml
 video-inference = { git = "https://github.com/simonjanssen/video-inference" }
