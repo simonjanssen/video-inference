@@ -1,5 +1,6 @@
 use crate::Error;
-use ndarray::{ArrayBase, Dim, OwnedRepr};
+use ndarray::Array3;
+use std::iter::FusedIterator;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::time::Duration;
@@ -18,11 +19,17 @@ pub(crate) fn init_video_rs() {
     });
 }
 
-pub(crate) fn calc_interval_frames(duration: f32, frames: u32, interval: Option<f32>) -> u32 {
-    match interval {
+pub(crate) fn calc_interval_frames(
+    video_duration: Duration,
+    video_frames: u64,
+    interval_duration: Option<Duration>,
+) -> u64 {
+    match interval_duration {
         Some(interval) => {
-            if duration > 0.0 && frames > 0 {
-                ((frames as f32 / duration) * interval).round().max(1.0) as u32
+            if interval > Duration::ZERO && video_frames > 0 {
+                ((video_frames as f64 / video_duration.as_secs_f64()) * interval.as_secs_f64())
+                    .round()
+                    .max(1.0) as u64
             } else {
                 1
             }
@@ -129,126 +136,27 @@ pub(crate) fn get_encoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<En
     Ok(encoder)
 }
 
-pub struct KeyFrameIterator {
+pub struct DecodedFrame {
+    pub time: Duration,
+    pub index: usize,
+    pub array: Array3<u8>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub enum DecodingStrategy {
+    Sequential,
+    #[default]
+    Seeking,
+}
+
+pub struct FrameIterator {
+    strategy: DecodingStrategy,
     decoder: Decoder,
     interval: usize,
     n_frames: usize,
     frame_idx: usize,
-    last_ts: Duration,
-    fps: f32,
-}
-
-impl KeyFrameIterator {
-    pub fn size(&self) -> (u32, u32) {
-        self.decoder.size()
-    }
-}
-
-impl Iterator for KeyFrameIterator {
-    type Item = (
-        Duration,
-        usize,
-        ArrayBase<OwnedRepr<u8>, Dim<[usize; 3]>, u8>,
-    );
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let frame_idx = self.frame_idx;
-            let target_ms = (self.frame_idx as f64 / self.fps as f64 * 1000.0) as i64;
-            match self.decoder.seek(target_ms) {
-                Ok(_) => {}
-                Err(_e) => {
-                    // end of video reached
-                    return None;
-                }
-            };
-            let (ts, frame) = match self.decoder.decode() {
-                Ok(result) => result,
-                Err(e) => {
-                    error!("{}", e);
-                    return None;
-                }
-            };
-
-            // skip if seek landed on the same keyframe as last iteration
-            let this_ts = ts.into();
-            self.frame_idx = frame_idx + self.interval;
-            if self.frame_idx > self.n_frames {
-                // end of video reached
-                return None;
-            }
-            if this_ts == self.last_ts && this_ts != Duration::ZERO {
-                warn!("Skipping previous keyframe - consider increasing interval");
-                continue;
-            } else {
-                self.last_ts = this_ts;
-                return Some((this_ts, frame_idx, frame));
-            }
-        }
-    }
-}
-
-#[derive(Default)]
-pub struct KeyFrameIteratorBuilder {
-    path: PathBuf,
-    size: Option<(u32, u32)>,
-    interval: Option<f32>,
-}
-
-impl KeyFrameIteratorBuilder {
-    pub fn resize(self, to: (u32, u32)) -> Self {
-        Self {
-            size: Some(to),
-            ..self
-        }
-    }
-
-    pub fn interval(self, every: f32) -> Self {
-        Self {
-            interval: Some(every),
-            ..self
-        }
-    }
-
-    pub fn build(self) -> Result<KeyFrameIterator> {
-        let decoder = get_decoder(self.path, self.size)?;
-        let duration = decoder
-            .duration()
-            .map_err(|e| Error::Video {
-                detail: "Failed to determine video duration!".to_string(),
-                source: e,
-            })?
-            .as_secs();
-        let n_frames = decoder.frames().map_err(|e| Error::Video {
-            detail: "Failed to determine number of frames!".to_string(),
-            source: e,
-        })? as i64;
-        let interval = calc_interval_frames(duration, n_frames as u32, self.interval) as usize;
-        let fps = decoder.frame_rate();
-        Ok(KeyFrameIterator {
-            decoder,
-            interval,
-            frame_idx: 0,
-            fps,
-            last_ts: Duration::ZERO,
-            n_frames: n_frames as usize,
-        })
-    }
-}
-
-impl KeyFrameIterator {
-    pub fn builder(path: impl AsRef<Path>) -> KeyFrameIteratorBuilder {
-        KeyFrameIteratorBuilder {
-            path: path.as_ref().to_path_buf(),
-            ..Default::default()
-        }
-    }
-}
-
-pub struct FrameIterator {
-    decoder: Decoder,
-    interval: usize,
-    frame_idx: usize,
+    last_ts: Option<Duration>,
+    fps: f64,
 }
 
 impl FrameIterator {
@@ -257,36 +165,181 @@ impl FrameIterator {
     }
 }
 
-impl From<KeyFrameIterator> for FrameIterator {
-    fn from(value: KeyFrameIterator) -> Self {
-        Self {
-            decoder: value.decoder,
-            interval: value.interval,
-            frame_idx: 0,
+impl Iterator for FrameIterator {
+    type Item = Result<DecodedFrame>;
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.n_frames.saturating_sub(self.frame_idx);
+        // Ceiling division: how many more items at most.
+        let upper = remaining.div_ceil(self.interval);
+        match self.strategy {
+            // Sequential decode hits exactly every `interval`-th frame until EOF.
+            DecodingStrategy::Sequential => (upper, Some(upper)),
+            // Seeking can skip duplicates when seeks land on the same keyframe,
+            // so the lower bound is 0 but the upper bound still holds.
+            DecodingStrategy::Seeking => (0, Some(upper)),
+        }
+    }
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.strategy {
+            DecodingStrategy::Sequential => loop {
+                if self.frame_idx >= self.n_frames {
+                    // end of video reached
+                    return None;
+                }
+                let frame_idx = self.frame_idx;
+                self.frame_idx += 1;
+                match self.decoder.decode() {
+                    Ok((ts, frame)) => {
+                        if frame_idx % self.interval == 0 {
+                            return Some(Ok(DecodedFrame {
+                                time: ts.into(),
+                                index: frame_idx,
+                                array: frame,
+                            }));
+                        } else {
+                            continue;
+                        }
+                    }
+                    Err(video_rs::Error::DecodeExhausted) => return None,
+                    Err(e) => {
+                        return Some(Err(VideoInferenceError::Video {
+                            detail: "Failed to decode next video frame!".to_string(),
+                            source: e,
+                        }));
+                    }
+                }
+            },
+            DecodingStrategy::Seeking => {
+                loop {
+                    if (self.frame_idx + self.interval) > self.n_frames {
+                        // end of video reached
+                        return None;
+                    }
+                    let target_frame_idx = self.frame_idx;
+                    self.frame_idx = target_frame_idx + self.interval;
+                    let target_ms = (target_frame_idx as f64 / self.fps * 1000.0).round() as i64;
+                    match self.decoder.seek(target_ms) {
+                        Ok(_) => {}
+                        Err(video_rs::Error::ReadExhausted) => return None,
+                        Err(e) => {
+                            return Some(Err(VideoInferenceError::Video {
+                                detail: "Failed to seek next video position!".to_string(),
+                                source: e,
+                            }));
+                        }
+                    }
+                    let (ts, frame) = match self.decoder.decode() {
+                        Ok(result) => result,
+                        Err(video_rs::Error::DecodeExhausted) => return None,
+                        Err(e) => {
+                            return Some(Err(VideoInferenceError::Video {
+                                detail: "Failed to decode next video frame!".to_string(),
+                                source: e,
+                            }));
+                        }
+                    };
+
+                    // skip if seek landed on the same keyframe as last iteration
+                    let this_ts = ts.into();
+                    if Some(this_ts) == self.last_ts {
+                        warn!("Skipping previous keyframe - consider increasing interval");
+                        continue;
+                    }
+                    self.last_ts = Some(this_ts);
+                    let approx_frame_idx = (ts.as_secs_f64() * self.fps).round() as usize;
+                    return Some(Ok(DecodedFrame {
+                        time: this_ts,
+                        index: approx_frame_idx,
+                        array: frame,
+                    }));
+                }
+            }
         }
     }
 }
 
-impl Iterator for FrameIterator {
-    type Item = (
-        Duration,
-        usize,
-        ArrayBase<OwnedRepr<u8>, Dim<[usize; 3]>, u8>,
-    );
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            let frame_idx = self.frame_idx;
-            match self.decoder.decode() {
-                Ok((frame_ts, frame)) => {
-                    self.frame_idx += 1;
-                    if frame_idx % self.interval == 0 {
-                        return Some((frame_ts.into(), frame_idx, frame));
-                    } else {
-                        continue;
-                    }
-                }
-                Err(_e) => return None,
-            }
+impl FusedIterator for FrameIterator {}
+
+pub struct FrameIteratorBuilder {
+    path: PathBuf,
+    size: Option<(u32, u32)>,
+    interval: Option<Duration>,
+    strategy: Option<DecodingStrategy>,
+}
+
+impl FrameIteratorBuilder {
+    pub fn resize(self, to: (u32, u32)) -> Self {
+        Self {
+            size: Some(to),
+            ..self
+        }
+    }
+
+    pub fn every(self, interval: Duration) -> Self {
+        Self {
+            interval: Some(interval),
+            ..self
+        }
+    }
+
+    pub fn sequential(self) -> Self {
+        Self {
+            strategy: Some(DecodingStrategy::Sequential),
+            ..self
+        }
+    }
+
+    pub fn seeking(self) -> Self {
+        Self {
+            strategy: Some(DecodingStrategy::Seeking),
+            ..self
+        }
+    }
+
+    pub fn strategy(self, strategy: DecodingStrategy) -> Self {
+        Self {
+            strategy: Some(strategy),
+            ..self
+        }
+    }
+
+    pub fn build(self) -> Result<FrameIterator> {
+        let decoder = get_decoder(self.path, self.size)?;
+        let duration = decoder.duration().map_err(|e| Error::Video {
+            detail: "Failed to determine video duration!".to_string(),
+            source: e,
+        })?;
+        let n_frames = decoder.frames().map_err(|e| Error::Video {
+            detail: "Failed to determine number of frames!".to_string(),
+            source: e,
+        })?;
+        let interval = calc_interval_frames(duration.into(), n_frames, self.interval) as usize;
+        debug!(
+            "interval_sec={:?} interval_frames={}",
+            self.interval, interval
+        );
+        let fps = decoder.frame_rate() as f64;
+        Ok(FrameIterator {
+            decoder,
+            interval,
+            frame_idx: 0,
+            fps,
+            last_ts: None,
+            n_frames: n_frames as usize,
+            strategy: self.strategy.unwrap_or(DecodingStrategy::Seeking),
+        })
+    }
+}
+
+impl FrameIterator {
+    pub fn builder(path: impl AsRef<Path>) -> FrameIteratorBuilder {
+        FrameIteratorBuilder {
+            path: path.as_ref().to_path_buf(),
+            size: None,
+            interval: None,
+            strategy: None,
         }
     }
 }

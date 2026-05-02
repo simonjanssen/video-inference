@@ -1,7 +1,7 @@
 use ort::session::Session;
 use std::path::Path;
 use std::sync::mpsc::sync_channel;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{thread, time};
 use tracing::debug;
 
@@ -16,12 +16,13 @@ mod video;
 use crate::detection::{Detection, detect_image};
 use crate::error::VideoInferenceError;
 use crate::onnx::{detect_input_shape, load_session};
-use crate::threading::{DetectionTask, detection_handler};
+use crate::threading::detection_handler;
+use crate::video::{DecodedFrame, DecodingStrategy};
 
 // public exports
 pub use error::VideoInferenceError as Error;
+pub use video::FrameIterator;
 pub use video::test_available_devices;
-pub use video::{FrameIterator, KeyFrameIterator, KeyFrameIteratorBuilder};
 pub type Result<T> = std::result::Result<T, VideoInferenceError>;
 
 /// All configuration options for `detect_video` bundled in one struct.
@@ -55,13 +56,16 @@ pub struct DetectionConfig {
     /// Detection Interval
     /// - Run detection every ..th second
     /// - Defaults to None (run detection on all frames)
-    pub interval: Option<f32>,
+    pub interval: Option<Duration>,
 
     /// ONNX-model image input tensor name
     pub input_tensor_name: String,
 
     /// ONNX-model results output tensor name
     pub output_tensor_name: String,
+
+    /// Video decoding strategy
+    pub strategy: DecodingStrategy,
 }
 
 impl Default for DetectionConfig {
@@ -73,6 +77,7 @@ impl Default for DetectionConfig {
             interval: None,
             input_tensor_name: "images".to_string(),
             output_tensor_name: "output0".to_string(),
+            strategy: DecodingStrategy::default(),
         }
     }
 }
@@ -104,7 +109,7 @@ pub fn detect_video(
     config: &DetectionConfig,
 ) -> Result<Vec<Detection>> {
     let mut model = load_model(path_onnx, config)?;
-    detect_video_multi_thread_keyframes(path_video, &mut model, config)
+    detect_video_multi_thread(path_video, &mut model, config)
 }
 
 /// Run video-detection on mp4-video. Defaults to the optimal approach.
@@ -124,7 +129,7 @@ pub fn detect_video_with_model(
     model: &mut Model,
     config: &DetectionConfig,
 ) -> Result<Vec<Detection>> {
-    detect_video_multi_thread_keyframes(path_video, model, config)
+    detect_video_multi_thread(path_video, model, config)
 }
 
 pub fn detect_video_single_thread(
@@ -133,23 +138,24 @@ pub fn detect_video_single_thread(
     config: &DetectionConfig,
 ) -> Result<Vec<Detection>> {
     let mut model = load_model(path_onnx, config)?;
-    let frames: FrameIterator = KeyFrameIterator::builder(path_video)
+    let frames = FrameIterator::builder(path_video)
         .resize(model.size)
-        .interval(config.interval.unwrap_or_default())
-        .build()?
-        .into();
+        .every(config.interval.unwrap_or_default())
+        .strategy(config.strategy)
+        .build()?;
     let size_video = frames.size();
 
     let mut detections = Vec::new();
     let t = time::Instant::now();
-    for (_frame_ts, frame_idx, frame) in frames {
+    for frame in frames {
+        let frame = frame?;
         let detection = detect_image(
             &mut model.session,
-            frame,
+            frame.array,
             config,
             size_video,
             model.size,
-            frame_idx as u32,
+            frame.index as u32,
         )?;
         detections.push(detection);
     }
@@ -163,80 +169,20 @@ pub fn detect_video_single_thread(
     Ok(detections)
 }
 
-/// Run video-detection multi-threaded
-///
-/// This version of `detect_video` runs decoding and detection in two separate threads.
-///
-/// # Example
-/// ```
-/// use video_inference::{DetectionConfig, detect_video_multithread};
-/// let config = DetectionConfig {interval: Some(1.0), ..Default::default()};
-/// let path_video = "./tests/assets/video.mp4";
-/// let path_onnx = "./tests/assets/model.onnx";
-/// let detections = detect_video_multithread(path_video, path_onnx, &config)?;
-/// ```
 pub fn detect_video_multi_thread(
     path_video: impl AsRef<Path>,
     model: &mut Model,
     config: &DetectionConfig,
 ) -> Result<Vec<Detection>> {
-    let frames: FrameIterator = KeyFrameIterator::builder(path_video)
+    let frames = FrameIterator::builder(path_video)
         .resize(model.size)
-        .interval(config.interval.unwrap_or_default())
-        .build()?
-        .into();
-    let size_video = frames.size();
-
-    // sync_channel used here for backpressure on the decoder loop
-    let (tx, rx) = sync_channel::<DetectionTask>(15);
-    let config_inner = config.clone();
-
-    // thread::scope (not thread::spawn) so we can borrow `&mut Model` into
-    // the spawned thread. Scoped threads are guaranteed to join before the
-    // scope exits, so the borrow checker accepts non-'static references.
-    // Rc/Arc wouldn't help: Rc is !Send, and Arc<Mutex<Session>> would just
-    // serialize inference behind a lock — no better than a plain &mut.
-    let detections = thread::scope(|s| {
-        let handle = s.spawn(|| detection_handler(rx, model, config_inner, size_video));
-
-        let t = time::Instant::now();
-        for (_frame_ts, frame_idx, frame) in frames {
-            let task = DetectionTask::new(frame, frame_idx as u32);
-            tx.send(task).map_err(|_| {
-                Error::Thread("Failed to dispatch to detection thread!".to_string())
-            })?;
-        }
-        debug!("decode video: {:?}", t.elapsed());
-        // drop the last tx clone so rx knows when all senders are gone
-        drop(tx);
-        let detections = handle.join().map_err(|_| {
-            Error::Thread("Failed to retrieve results from detection thread!".to_string())
-        })??;
-        let dt = t.elapsed().as_secs_f32();
-        debug!(
-            "detect video: {:?} ({} frames, {} frames/sec)",
-            dt,
-            detections.len(),
-            (detections.len() as f32 / dt)
-        );
-        Ok(detections)
-    })?;
-    Ok(detections)
-}
-
-pub fn detect_video_multi_thread_keyframes(
-    path_video: impl AsRef<Path>,
-    model: &mut Model,
-    config: &DetectionConfig,
-) -> Result<Vec<Detection>> {
-    let frames = KeyFrameIterator::builder(path_video)
-        .resize(model.size)
-        .interval(config.interval.unwrap_or_default())
+        .every(config.interval.unwrap_or_default())
+        .strategy(config.strategy)
         .build()?;
     let size_video = frames.size();
 
     // sync_channel used here for backpressure on the decoder loop
-    let (tx, rx) = sync_channel::<DetectionTask>(15);
+    let (tx, rx) = sync_channel::<DecodedFrame>(15);
     let config_inner = config.clone();
 
     // thread::scope (not thread::spawn) so we can borrow `&mut Model` into
@@ -247,12 +193,12 @@ pub fn detect_video_multi_thread_keyframes(
     let detections = thread::scope(|s| {
         let handle = s.spawn(|| detection_handler(rx, model, config_inner, size_video));
         let t = time::Instant::now();
-        for (frame_ts, frame_idx, frame) in frames {
-            let task = DetectionTask::new(frame, frame_idx as u32);
-            tx.send(task).map_err(|_| {
+        for frame in frames {
+            let frame = frame?;
+            debug!("ts={:.3?} idx={:}", frame.time, frame.index);
+            tx.send(frame).map_err(|_| {
                 Error::Thread("Failed to dispatch task to detection thread!".to_string())
             })?;
-            debug!("ts={:.3?} idx={:}", frame_ts, frame_idx);
         }
         debug!("decode video: {:?}", t.elapsed());
         // drop the last tx clone so rx knows when all senders are gone
@@ -275,18 +221,22 @@ pub fn detect_video_multi_thread_keyframes(
 /// Run video-decoding frame by frame
 ///
 /// This is for testing purposes only to measures the decoder-runtime on different targets
-pub fn decode_video(path_video: impl AsRef<Path>, interval: Option<f32>) -> Result<()> {
+pub fn decode_video_sequential(
+    path_video: impl AsRef<Path>,
+    interval: Option<Duration>,
+) -> Result<()> {
     let t = Instant::now();
-    let frames: FrameIterator = KeyFrameIterator::builder(path_video)
-        .interval(interval.unwrap_or_default())
-        .build()?
-        .into();
-    for (frame_ts, frame_idx, frame) in frames {
+    let frames = FrameIterator::builder(path_video)
+        .every(interval.unwrap_or_default())
+        .sequential()
+        .build()?;
+    for frame in frames {
+        let frame = frame?;
         debug!(
             "ts={:.3?} idx={:} shape={:?}",
-            frame_ts,
-            frame_idx,
-            frame.shape()
+            frame.time,
+            frame.index,
+            frame.array.shape()
         );
     }
     debug!("decode video: {:?}", t.elapsed());
@@ -305,17 +255,22 @@ pub fn decode_video(path_video: impl AsRef<Path>, interval: Option<f32>) -> Resu
 /// Hopefully, this is significantly faster than sequential decoding when the desired
 /// interval is larger than the keyframe spacing, at the cost of frame-exact
 /// positioning.
-pub fn decode_video_keyframes(path_video: impl AsRef<Path>, interval: Option<f32>) -> Result<()> {
+pub fn decode_video_seeking(
+    path_video: impl AsRef<Path>,
+    interval: Option<Duration>,
+) -> Result<()> {
     let t = Instant::now();
-    let frames = KeyFrameIterator::builder(path_video)
-        .interval(interval.unwrap_or_default())
+    let frames = FrameIterator::builder(path_video)
+        .every(interval.unwrap_or_default())
+        .seeking()
         .build()?;
-    for (frame_ts, frame_idx, frame) in frames {
+    for frame in frames {
+        let frame = frame?;
         debug!(
             "ts={:.3?} idx={:} shape={:?}",
-            frame_ts,
-            frame_idx,
-            frame.shape()
+            frame.time,
+            frame.index,
+            frame.array.shape()
         );
     }
     debug!("decode video: {:?}", t.elapsed());
@@ -333,8 +288,9 @@ pub fn annotate_video(
     use crate::video::get_encoder;
     use std::collections::HashMap;
 
-    let frames = KeyFrameIterator::builder(path_video)
-        .interval(config.interval.unwrap_or_default())
+    let frames = FrameIterator::builder(path_video)
+        .every(config.interval.unwrap_or_default())
+        .strategy(config.strategy)
         .build()?;
     let size_video = frames.size();
 
@@ -346,14 +302,15 @@ pub fn annotate_video(
     let mut encoder = get_encoder(path_output, size_video)?;
 
     let t = time::Instant::now();
-    for (frame_ts, frame_idx, frame) in frames {
+    for frame in frames {
+        let frame = frame?;
         // draw bboxes
         let bboxes = detections_map
-            .get(&frame_idx)
+            .get(&frame.index)
             .ok_or(VideoInferenceError::Io("Missing detection".to_string()))?;
-        let annotated = draw_bboxes_arr(frame.clone(), bboxes)?;
+        let annotated = draw_bboxes_arr(frame.array.clone(), bboxes)?;
         encoder
-            .encode(&annotated, frame_ts.into())
+            .encode(&annotated, frame.time.into())
             .map_err(|e| VideoInferenceError::Video {
                 detail: "Failed to encode annotated frame!".to_string(),
                 source: e,
