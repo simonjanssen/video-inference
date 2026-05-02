@@ -17,12 +17,10 @@ use crate::detection::{Detection, detect_image};
 use crate::error::VideoInferenceError;
 use crate::onnx::{detect_input_shape, load_session};
 use crate::threading::detection_handler;
-use crate::video::{DecodedFrame, DecodingStrategy};
 
 // public exports
 pub use error::VideoInferenceError as Error;
-pub use video::FrameIterator;
-pub use video::test_available_devices;
+pub use video::{DecodedFrame, FrameIterator, DecodingStrategy, test_available_devices};
 pub type Result<T> = std::result::Result<T, VideoInferenceError>;
 
 /// All configuration options for `detect_video` bundled in one struct.
