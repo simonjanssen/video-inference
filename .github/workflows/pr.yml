@@ -51,6 +51,9 @@ jobs:
       - name: cargo test (all features)
         run: cargo test --all-features --all-targets
 
+      - name: cargo test (docs)
+        run: cargo test --all-features --doc
+
       - name: cargo doc (lib, no deps, warnings as errors)
         env:
           RUSTDOCFLAGS: "-D warnings"
