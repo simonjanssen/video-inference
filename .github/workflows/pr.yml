@@ -39,6 +39,15 @@ jobs:
           components: rustfmt, clippy
           cache: true
 
+      - name: additional cargo tools
+        run: cargo install cargo-audit cargo-deny --locked
+
+      - name: cargo audit 
+        run: cargo audit --deny warnings
+
+      - name: cargo deny check
+        run: cargo deny check
+
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
@@ -54,7 +63,7 @@ jobs:
       - name: cargo test (docs)
         run: cargo test --all-features --doc
 
-      - name: cargo doc (lib, no deps, warnings as errors)
+      - name: cargo build docs
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --all-features --no-deps --lib
