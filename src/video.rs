@@ -25,16 +25,12 @@ pub(crate) fn calc_interval_frames(
     interval_duration: Option<Duration>,
 ) -> u64 {
     match interval_duration {
-        Some(interval) => {
-            if interval > Duration::ZERO && video_frames > 0 {
-                ((video_frames as f64 / video_duration.as_secs_f64()) * interval.as_secs_f64())
-                    .round()
-                    .max(1.0) as u64
-            } else {
-                1
-            }
+        Some(interval) if interval > Duration::ZERO && video_frames > 0 => {
+            ((video_frames as f64 / video_duration.as_secs_f64()) * interval.as_secs_f64())
+                .round()
+                .max(1.0) as u64
         }
-        None => 1,
+        _ => 1,
     }
 }
 
