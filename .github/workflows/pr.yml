@@ -45,8 +45,8 @@ jobs:
       - name: cargo audit 
         run: cargo audit --deny warnings
 
-      - name: cargo deny check
-        run: cargo deny check
+      - name: cargo deny check licenses
+        run: cargo deny check licenses
 
       - name: cargo fmt --check
         run: cargo fmt --all -- --check
