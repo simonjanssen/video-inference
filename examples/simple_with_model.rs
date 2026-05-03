@@ -1,4 +1,4 @@
-use std::time;
+use std::time::{self, Duration};
 
 use anyhow::Error;
 use tracing_subscriber::EnvFilter;
@@ -10,7 +10,7 @@ fn main() -> Result<(), Error> {
         .init();
     // run detections in 4.7s intervals (optimum for our test videos)
     let config = DetectionConfig {
-        interval: Some(4.7),
+        interval: Some(Duration::from_millis(4700)),
         ..Default::default()
     };
     let path_video = "./tests/assets/video.mp4";

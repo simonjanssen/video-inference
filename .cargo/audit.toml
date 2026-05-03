@@ -1,0 +1,9 @@
+# Configuration for `cargo audit`.
+# See https://docs.rs/cargo-audit/latest/cargo_audit/config/index.html
+
+[advisories]
+ignore = [
+    # `paste` is unmaintained but pulled in transitively via
+    # imageproc -> nalgebra -> simba. No fix available upstream.
+    "RUSTSEC-2024-0436",
+]

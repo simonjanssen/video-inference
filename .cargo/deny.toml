@@ -1,0 +1,40 @@
+# Configuration for `cargo deny`. See https://embarkstudios.github.io/cargo-deny/
+#
+# This crate is published under MIT, so we only allow permissive licenses
+# (or weak file-level copyleft like MPL-2.0) in our dependency tree.
+
+[licenses]
+# SPDX identifiers of licenses we accept in dependencies.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "CDLA-Permissive-2.0", # webpki-roots data license
+    "ISC",
+    "MIT",
+    "MPL-2.0",             # weak file-level copyleft, fine when linking from MIT
+    "Unicode-3.0",         # modern Unicode license, OSI-approved
+    "Unlicense",           # public-domain dedication
+    "WTFPL",               # ffmpeg-next / ffmpeg-sys-next
+]
+# Threshold (0.0 - 1.0) for accepting a license file as matching its claimed
+# SPDX expression. 0.8 is the default; bump if false positives appear.
+confidence-threshold = 0.8
+
+[bans]
+# Allow multiple versions of the same crate to coexist (common with
+# transitive deps); flip to "deny" if you want to enforce single versions.
+multiple-versions = "allow"
+wildcards = "deny"
+
+[advisories]
+# Vulnerability scanning is handled by `cargo audit` in CI (see
+# .cargo/audit.toml). This section is kept empty so `cargo deny check` is
+# self-contained and can also be run locally without surprises.
+ignore = []
+
+[sources]
+# Only allow crates from the official registry.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

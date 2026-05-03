@@ -1,7 +1,7 @@
 use anyhow::{Error, anyhow};
 use clap::Parser;
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 use tracing_subscriber::EnvFilter;
 use video_inference::{DetectionConfig, detect_video};
 
@@ -44,7 +44,7 @@ fn main() -> Result<(), Error> {
     let args = Args::parse();
     let checkpoint = resolve_checkpoint(&args)?;
     let config = DetectionConfig {
-        interval: Some(1.0),
+        interval: Some(Duration::from_secs(1)),
         ..Default::default()
     };
     let path_source = args.source;

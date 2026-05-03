@@ -1,15 +1,20 @@
 [package]
 name = "video-inference"
-version = "0.0.5"
+version = "0.0.6"
 edition = "2024"
 description = "Run ONNX object-detection models on video frames with hardware-accelerated decoding and inference"
 license = "MIT"
 repository = "https://github.com/simonjanssen/video-inference"
 authors = ["Simon Janssen"]
 keywords = ["video", "inference", "onnx", "object-detection"]
-categories = ["computer-vision", "multimedia::video"]
+categories = ["multimedia::video"]
 readme = "README.md"
 rust-version = "1.85"
+include = ["src/**", "Cargo.toml", "LICENSE", "README.md"]
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = []
@@ -23,10 +28,13 @@ tracing = "0.1.44"
 video-rs = { version = "0.11.0", features = ["ndarray"] }
 serde = { version = "1.0.228", features = ["derive"], optional = true }
 ab_glyph = { version = "0.2.32", optional = true }
-image = { version = "0.25.10", optional = true }
-imageproc = { version = "0.26.1", optional = true }
-dirs = "6"
+image = { version = "0.25.10", default-features = false, optional = true }
+imageproc = { version = "0.26.2", default-features = false, features = ["text"], optional = true }
+dirs = "6.0.0"
 thiserror = "2.0.18"
+
+# the following address cargo audit findings
+rustls-webpki = "0.103.13"
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 ort = { version = "2.0.0-rc.12", features = ["coreml"] }

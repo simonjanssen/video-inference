@@ -1,4 +1,3 @@
-use ndarray::Array3;
 use std::sync::mpsc::Receiver;
 
 use crate::DetectionConfig;
@@ -6,33 +5,23 @@ use crate::Model;
 use crate::Result;
 use crate::detection::Detection;
 use crate::detection::detect_image;
-
-pub(crate) struct DetectionTask {
-    frame: Array3<u8>,
-    frame_idx: u32,
-}
-
-impl DetectionTask {
-    pub fn new(frame: Array3<u8>, frame_idx: u32) -> Self {
-        Self { frame, frame_idx }
-    }
-}
+use crate::video::DecodedFrame;
 
 pub(crate) fn detection_handler(
-    rx: Receiver<DetectionTask>,
+    rx: Receiver<DecodedFrame>,
     model: &mut Model,
     config: DetectionConfig,
     size_video: (u32, u32),
 ) -> Result<Vec<Detection>> {
     let mut detections = Vec::new();
-    while let Ok(task) = rx.recv() {
+    while let Ok(frame) = rx.recv() {
         let detection = detect_image(
             &mut model.session,
-            task.frame,
+            frame.array,
             &config,
             size_video,
             model.size,
-            task.frame_idx,
+            frame.index as u32,
         )?;
         detections.push(detection);
     }
