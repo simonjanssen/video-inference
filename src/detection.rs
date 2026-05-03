@@ -129,7 +129,7 @@ impl BoundingBox {
 
 /// Class-Sensitive Non Maxima Suppression for Overlapping Bounding Boxes
 /// Iteratively removes lower scoring bboxes which have an IoU above iou_thresold.
-/// Inspired by: https://pytorch.org/vision/master/_modules/torchvision/ops/boxes.html#nms
+/// Inspired by: <https://pytorch.org/vision/master/_modules/torchvision/ops/boxes.html#nms>
 pub fn nms(boxes: &[BoundingBox], iou_threshold: f32) -> Vec<BoundingBox> {
     if boxes.is_empty() {
         return Vec::new();

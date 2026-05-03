@@ -20,7 +20,9 @@ use crate::threading::detection_handler;
 
 // public exports
 pub use error::VideoInferenceError as Error;
-pub use video::{DecodedFrame, FrameIterator, DecodingStrategy, test_available_devices};
+pub use video::{
+    DecodedFrame, DecodingStrategy, FrameIterator, FrameIteratorBuilder, test_available_devices,
+};
 pub type Result<T> = std::result::Result<T, VideoInferenceError>;
 
 /// All configuration options for `detect_video` bundled in one struct.
@@ -94,12 +96,14 @@ pub fn load_model(path_onnx: impl AsRef<Path>, config: &DetectionConfig) -> Resu
 /// Run video-detection on mp4-video. Defaults to the optimal approach.
 ///
 /// # Example
-/// ```
+/// ```no_run
 /// use video_inference::{DetectionConfig, detect_video};
-/// let config = DetectionConfig {interval: Some(4.7), ..Default::default()};
-/// let path_video = "./tests/assets/video.mp4";
-/// let path_onnx = "./tests/assets/model.onnx";
+/// use std::time::Duration;
+/// let config = DetectionConfig {interval: Some(Duration::from_secs(1)), ..Default::default()};
+/// let path_video = "video.mp4";
+/// let path_onnx = "model.onnx";
 /// let detections = detect_video(path_video, path_onnx, &config)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn detect_video(
     path_video: impl AsRef<Path>,
@@ -114,13 +118,15 @@ pub fn detect_video(
 ///
 /// This variant allows the caller to externally initialize the model.
 /// This might be beneficial if running on multiple videos with the same model.
-/// ```
-/// use video_inference::{DetectionConfig, load_model, detect_video};
-/// let config = DetectionConfig {interval: Some(4.7), ..Default::default()};
-/// let path_video = "./tests/assets/video.mp4";
-/// let path_onnx = "./tests/assets/model.onnx";
-/// let mut model = load_model(path_onnx, config)?;
+/// ```no_run
+/// use video_inference::{DetectionConfig, load_model, detect_video_with_model};
+/// use std::time::Duration;
+/// let config = DetectionConfig {interval: Some(Duration::from_secs(1)), ..Default::default()};
+/// let path_video = "video.mp4";
+/// let path_onnx = "model.onnx";
+/// let mut model = load_model(path_onnx, &config)?;
 /// let detections = detect_video_with_model(path_video, &mut model, &config)?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
 /// ```
 pub fn detect_video_with_model(
     path_video: impl AsRef<Path>,

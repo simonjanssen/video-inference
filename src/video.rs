@@ -142,13 +142,94 @@ pub struct DecodedFrame {
     pub array: Array3<u8>,
 }
 
+/// Strategy used by [`FrameIterator`] to advance through a video.
+///
+/// The choice is a trade-off between throughput and the precision with which
+/// returned frames align to the requested sampling interval. Both strategies
+/// yield items at roughly the same time positions, but reach them via very
+/// different decoder operations.
+///
+/// # Variants
+///
+/// - [`Sequential`](Self::Sequential): decode every frame from the beginning
+///   of the video and emit only every *n*-th one. No seeking is performed.
+///   This is robust on any input (including streams without a usable seek
+///   index) and produces frames at exact frame indices, but pays the full
+///   decode cost for every frame in the video.
+///
+/// - [`Seeking`](Self::Seeking) *(default)*: for each sampling point, seek
+///   the decoder to the corresponding timestamp and decode a single frame.
+///   This is typically much faster for coarse intervals but has two
+///   consequences caused by how video containers and codecs implement seek:
+///
+///   * The decoded frame is the next frame produced after a backward seek to
+///     the nearest preceding keyframe; its timestamp may therefore be earlier
+///     than the requested one. The reported `index` on [`DecodedFrame`] is
+///     derived from the actual timestamp, not the requested position.
+///   * If the requested interval is finer than the keyframe spacing of the
+///     video, consecutive seeks can land on the same keyframe. The iterator
+///     detects and skips such duplicates, which means the seeking strategy
+///     can produce fewer frames than requested.
+///
+/// # Choosing a strategy
+///
+/// Pick `Seeking` for sparse sampling (e.g. one frame per second on a long
+/// video) where decode cost dominates. Pick `Sequential` when you need every
+/// sampled frame to land at an exact frame index, when the input may be a
+/// non-seekable stream, or when the sampling interval is small enough that
+/// sequential decoding is cheaper than one seek per item.
 #[derive(Debug, Clone, Copy, Default)]
 pub enum DecodingStrategy {
+    /// Decode every frame and emit every *n*-th one.
     Sequential,
+    /// Seek to each sampling point and decode a single frame.
     #[default]
     Seeking,
 }
 
+/// Iterator that yields decoded frames sampled at a fixed time interval.
+///
+/// `FrameIterator` decodes a video file and produces [`DecodedFrame`] items
+/// at approximately fixed intervals, configured via
+/// [`FrameIteratorBuilder::every`]. The way frames are reached is controlled
+/// by [`DecodingStrategy`]; see its documentation for the trade-offs.
+///
+/// The iterator is constructed via [`FrameIterator::builder`].
+///
+/// # Item type
+///
+/// `Item = Result<DecodedFrame>`. EOF is signalled with `None`; transient
+/// decoder errors are surfaced as `Some(Err(_))`. Once an error has been
+/// returned, the iterator does not retry the failed step — `frame_idx` has
+/// already been advanced — so iteration always makes forward progress and
+/// terminates within a bounded number of steps. The iterator implements
+/// [`FusedIterator`].
+///
+/// # Size hints
+///
+/// [`size_hint`](Iterator::size_hint) reports a tight upper bound based on
+/// the remaining frames and configured interval. The lower bound is exact
+/// for [`DecodingStrategy::Sequential`] and `0` for
+/// [`DecodingStrategy::Seeking`], because seeks may produce fewer items than
+/// requested when the video's keyframe spacing is coarser than the interval.
+///
+/// # Example
+///
+/// ```no_run
+/// use std::time::Duration;
+/// use video_inference::{FrameIterator, DecodingStrategy};
+///
+/// let frames = FrameIterator::builder("input.mp4")
+///     .every(Duration::from_secs(1))
+///     .seeking()
+///     .build()?;
+///
+/// for frame in frames {
+///     let frame = frame?;
+///     println!("t={:?} idx={}", frame.time, frame.index);
+/// }
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
 pub struct FrameIterator {
     strategy: DecodingStrategy,
     decoder: Decoder,
