@@ -20,22 +20,22 @@ video-inference = { git = "https://github.com/simonjanssen/video-inference" }
 Note: matching targets are auto-discovered at build time, such that the right features for `ort` (inference) and `rust-ffmpeg` (decoding) are enabled. Currently tested on `macos/aarch64` (Apple Silicon) and `linux/aarch64` (Raspberry Pi).
 
 ## Quickstart
-```rust
-use anyhow::Error;
+```rust,no_run
+use std::time::Duration;
 use tracing_subscriber::EnvFilter;
-use video_inference::{DetectionConfig, detect_video};
+use video_inference::{DetectionConfig, detect_video, Result};
 
-fn main() -> Result<(), Error> {
+fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new("error,video_inference=trace"))
         .init();
     // run detections in 1s intervals
     let config = DetectionConfig {
-        interval: Some(1.0),
+        interval: Some(Duration::from_secs(1)),
         ..Default::default()
     };
-    let path_video = "./tests/assets/video.mp4";
-    let path_onnx = "./tests/assets/model.onnx";
+    let path_video = "video.mp4";
+    let path_onnx = "model.onnx";
     let detections = detect_video(path_video, path_onnx, &config)?;
     Ok(())
 }
