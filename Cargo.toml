@@ -20,6 +20,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 default = []
 annotate = ["ab_glyph", "image", "imageproc"]
 serde = ["dep:serde"]
+ffmpeg-sidecar = ["dep:ffmpeg-sidecar"]
 
 [dependencies]
 ndarray = "0.17.2"
@@ -32,6 +33,7 @@ image = { version = "0.25.10", default-features = false, optional = true }
 imageproc = { version = "0.26.2", default-features = false, features = ["text"], optional = true }
 dirs = "6.0.0"
 thiserror = "2.0.18"
+ffmpeg-sidecar = { version = "2.5.2", optional = true }
 
 # the following address cargo audit findings
 rustls-webpki = "0.103.13"
