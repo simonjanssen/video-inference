@@ -1,4 +1,4 @@
-// ! Testing https://github.com/nathanbabcock/ffmpeg-sidecar
+// ! Benchmarking https://github.com/nathanbabcock/ffmpeg-sidecar
 
 use std::time::{Duration, Instant};
 
@@ -25,11 +25,10 @@ fn main() -> Result<(), Error> {
 
     let mut count = 0;
     for frame in sidecar.filter_frames() {
-        let _pixels: Vec<u8> = frame.data; // <- raw RGB pixels! 🎨
+        let _pixels: Vec<u8> = frame.data;
         count += 1
     }
     info!("{} frames (sidecar all) in {:?}", count, t0.elapsed());
-
 
     // use ffmpeg_sidecar with seeking every xth interval
     // spawn a new ffmpeg per seek position with `-ss <time>` placed BEFORE `-i`
@@ -55,7 +54,6 @@ fn main() -> Result<(), Error> {
         position += interval;
     }
     info!("{} frames (sidecar seeking) in {:?}", count, t0.elapsed());
-
 
     let t0 = Instant::now();
     let frames = FrameIterator::builder(path_video).sequential().build()?;
