@@ -1,3 +1,4 @@
+use ndarray::array;
 use video_inference::detection::{BoundingBox, nms};
 
 fn bbox(x1: f32, y1: f32, x2: f32, y2: f32, score: f32, class_idx: i32) -> BoundingBox {
@@ -113,4 +114,38 @@ fn nms_returns_sorted_by_score_descending() {
     assert_eq!(result.len(), 3);
     assert!(result[0].score >= result[1].score);
     assert!(result[1].score >= result[2].score);
+}
+
+#[test]
+fn xywh_center_and_size() {
+    let b = bbox(10.0, 20.0, 30.0, 60.0, 0.9, 0);
+    assert_eq!(b.xywh(), (20, 40, 20, 40));
+}
+
+#[test]
+fn x1y1wh_top_left_and_size() {
+    let b = bbox(10.0, 20.0, 30.0, 60.0, 0.9, 0);
+    assert_eq!(b.x1y1wh(), (10, 20, 20, 40));
+}
+
+#[test]
+fn from_array_picks_max_class() {
+    // [cx, cy, w, h, class0_conf, class1_conf, class2_conf]
+    let arr = array![15.0, 25.0, 10.0, 20.0, 0.1, 0.7, 0.3];
+    let b = BoundingBox::from_array(arr.view(), Some(7));
+    assert_eq!(b.class_idx, 1);
+    assert!((b.score - 0.7).abs() < f32::EPSILON);
+    // xywh -> xyxy: cx-w/2 .. cx+w/2
+    assert_eq!((b.x1, b.y1, b.x2, b.y2), (10.0, 15.0, 20.0, 35.0));
+    assert_eq!(b.frame_idx, Some(7));
+}
+
+#[test]
+fn from_array_6_reads_xyxy() {
+    let arr = array![10.0, 20.0, 30.0, 40.0, 0.85, 2.0];
+    let b = BoundingBox::from_array_6(arr.view(), Some(3));
+    assert_eq!((b.x1, b.y1, b.x2, b.y2), (10.0, 20.0, 30.0, 40.0));
+    assert!((b.score - 0.85).abs() < f32::EPSILON);
+    assert_eq!(b.class_idx, 2);
+    assert_eq!(b.frame_idx, Some(3));
 }

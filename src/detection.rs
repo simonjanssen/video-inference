@@ -228,7 +228,6 @@ pub(crate) fn extract_bboxes(
             let candidates_image = output.select(Axis(2), &idx_candidates);
             // Remove only the batch dim; squeeze() would collapse a single-candidate axis and panic
             let candidates_image = candidates_image.index_axis(Axis(0), 0);
-            //let mut bboxes = Vec::new();
             let mut bboxes: Vec<BoundingBox> = Vec::with_capacity(candidates_image.len_of(Axis(1)));
             for candidate in candidates_image.axis_iter(Axis(1)) {
                 let bbox = BoundingBox::from_array(

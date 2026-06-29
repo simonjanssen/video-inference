@@ -96,25 +96,6 @@ pub fn test_available_devices(path: impl AsRef<Path>) {
     }
 }
 
-// pub(crate) fn debug_decoder(decoder: &Decoder) -> Result<(), Error> {
-//     let duration = decoder.duration()?;
-//     let frame_rate = decoder.frame_rate();
-//     let frames = decoder.frames()?;
-//     let size = decoder.size();
-//     let size_out = decoder.size_out();
-//     let time_base = decoder.time_base();
-//     debug!(
-//         ?duration,
-//         ?frame_rate,
-//         frames,
-//         ?size,
-//         ?size_out,
-//         ?time_base,
-//         "Decoder properties"
-//     );
-//     Ok(())
-// }
-
 #[cfg(feature = "annotate")]
 pub(crate) fn get_encoder(path: impl AsRef<Path>, size: (u32, u32)) -> Result<Encoder> {
     let (w, h) = size;
