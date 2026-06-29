@@ -1,0 +1,48 @@
+name: Audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/audit.toml'
+      - '.cargo/deny.toml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Cache cargo tool binaries
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/cargo-audit
+            ~/.cargo/bin/cargo-deny
+          key: ${{ runner.os }}-cargo-tools-${{ hashFiles('.github/workflows/audit.yml') }}
+
+      - name: additional cargo tools
+        run: |
+          command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
+          command -v cargo-deny  >/dev/null || cargo install cargo-deny  --locked
+
+      - name: cargo audit
+        run: cargo audit --deny warnings
+
+      - name: cargo deny check licenses
+        run: cargo deny check licenses
