@@ -3,7 +3,7 @@
 
 [advisories]
 ignore = [
-    # `paste` is unmaintained but pulled in transitively via
-    # imageproc -> nalgebra -> simba. No fix available upstream.
-    "RUSTSEC-2024-0436",
+    # `ttf-parser` is unmaintained but pulled in transitively via
+    # ab_glyph (used directly and via imageproc). No fix available upstream.
+    "RUSTSEC-2026-0192",
 ]

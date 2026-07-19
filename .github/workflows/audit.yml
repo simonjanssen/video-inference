@@ -8,6 +8,10 @@ on:
       - 'Cargo.lock'
       - '.cargo/audit.toml'
       - '.cargo/deny.toml'
+  workflow_dispatch:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: '0 6 * * 1'
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -28,21 +32,14 @@ jobs:
         with:
           cache: true
 
-      - name: Cache cargo tool binaries
-        uses: actions/cache@v6
+      - uses: taiki-e/install-action@v2
         with:
-          path: |
-            ~/.cargo/bin/cargo-audit
-            ~/.cargo/bin/cargo-deny
-          key: ${{ runner.os }}-cargo-tools-${{ hashFiles('.github/workflows/audit.yml') }}
+          tool: |
+            cargo-audit
+            cargo-deny
 
-      - name: additional cargo tools
-        run: |
-          command -v cargo-audit >/dev/null || cargo install cargo-audit --locked
-          command -v cargo-deny  >/dev/null || cargo install cargo-deny  --locked
-
-      - name: cargo audit
+      - name: Run cargo audit
         run: cargo audit --deny warnings
 
-      - name: cargo deny check licenses
-        run: cargo deny check licenses
+      - name: Run cargo deny check licenses
+        run: cargo deny check licenses --deny warnings
