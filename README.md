@@ -1,6 +1,7 @@
 # video-inference
 
-> My grandma likes to watch birds. So we've built a multi-camera system around her cottage in Sweden to record 60s-snippets of the surroundings. The question is: what's the fastest way to run object detection on these 60s-mp4 video snippets? This is what this repository intends to find out.
+> [!NOTE]
+> Fast object detection on video frames.
 
 ## Setup
 This crate relies on [`video-rs`](https://lib.rs/crates/video-rs) for mp4-video decoding which in turn requires [`rust-ffmpeg` dependencies](https://github.com/zmwangx/rust-ffmpeg/wiki/Notes-on-building#dependencies) to be installed at build time.
