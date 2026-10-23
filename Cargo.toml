@@ -23,7 +23,7 @@ serde = ["dep:serde"]
 
 [dependencies]
 ab_glyph = { version = "0.2.32", optional = true }
-dirs = "6.0.0"
+dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, optional = true }
 imageproc = { version = "0.27.0", default-features = false, features = ["text"], optional = true }
 ndarray = "0.17.2"
