@@ -7,7 +7,11 @@ use tracing::debug;
 use crate::{Result, VideoInferenceError};
 
 pub(crate) fn load_session(path_onnx: impl AsRef<Path>) -> Result<Session> {
-    let mut builder = Session::builder()
+    let env = ort::init().build().map_err(|e| VideoInferenceError::Onnx {
+        detail: "Failed to initialize ONNX environment".to_string(),
+        source: e,
+    })?;
+    let mut builder = Session::builder(&env)
         .map_err(|e| VideoInferenceError::Onnx {
             detail: "Failed to initialize ONNX runtime session!".to_string(),
             source: e,
