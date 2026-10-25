@@ -32,7 +32,7 @@ jobs:
         with:
           cache: true
 
-      - uses: taiki-e/install-action@v2.87.29
+      - uses: taiki-e/install-action@v2.87.30
         with:
           tool: |
             cargo-audit
