@@ -250,7 +250,7 @@ impl Iterator for FrameIterator {
                 self.frame_idx += 1;
                 match self.decoder.decode() {
                     Ok((ts, frame)) => {
-                        if frame_idx % self.interval == 0 {
+                        if frame_idx.is_multiple_of(self.interval) {
                             return Some(Ok(DecodedFrame {
                                 time: ts.into(),
                                 index: frame_idx,

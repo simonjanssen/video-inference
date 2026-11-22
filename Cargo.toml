@@ -9,7 +9,7 @@ authors = ["Simon Janssen"]
 keywords = ["video", "inference", "onnx", "object-detection"]
 categories = ["multimedia::video"]
 readme = "README.md"
-rust-version = "1.85"
+rust-version = "1.92"
 include = ["src/**", "Cargo.toml", "LICENSE", "README.md"]
 
 [package.metadata.docs.rs]
@@ -23,7 +23,6 @@ serde = ["dep:serde"]
 
 [dependencies]
 ab_glyph = { version = "0.2.32", optional = true }
-dirs = "7.0.0"
 image = { version = "0.25.10", default-features = false, optional = true }
 imageproc = { version = "0.27.0", default-features = false, features = ["text"], optional = true }
 ndarray = "0.17.2"
@@ -31,23 +30,24 @@ ort = { version = "2.0.0-rc.15", features = ["tls-rustls"] }
 serde = { version = "1.0.229", features = ["derive"], optional = true }
 thiserror = "2.0.21"
 tracing = "0.1.44"
-video-rs = { version = "0.12.0", features = ["ndarray"] }
+video-rs = { version = "0.13.0", features = ["ndarray"] }
 
 [target.'cfg(all(target_os = "macos", target_arch = "aarch64"))'.dependencies]
 ort = { version = "2.0.0-rc.15", features = ["coreml"] }
+dirs = "7.0.0"
 
 [target.'cfg(all(target_os = "linux", target_arch = "x86_64"))'.dependencies]
 ort = { version = "2.0.0-rc.15", features = ["cuda"] }
 
 [target.'cfg(all(target_os = "linux", target_arch = "aarch64"))'.dependencies]
-ffmpeg-next = { version = "9.0.0", features = ["rpi"] }
+ffmpeg-next = { version = "9.1.0", features = ["rpi"] }
 
 [target.'cfg(not(all(target_os = "linux", target_arch = "aarch64")))'.dependencies]
-ffmpeg-next = { version = "9.0.0" }
+ffmpeg-next = { version = "9.1.0" }
 
 [dev-dependencies]
 anyhow = "1.0.104"
-clap = { version = "4.6.7", features = ["derive"] }
+clap = { version = "4.6.9", features = ["derive"] }
 dotenvy = "0.15.7"
 rayon = "1.12.0"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
