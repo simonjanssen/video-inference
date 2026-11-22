@@ -6,4 +6,10 @@ ignore = [
     # `ttf-parser` is unmaintained but pulled in transitively via
     # ab_glyph (used directly and via imageproc). No fix available upstream.
     "RUSTSEC-2026-0192",
+    # `url` 2.5.9 is not selectable: video-rs pins `url = "=2.5.8"` exactly (0.12.0,
+    # 0.13.0 and upstream main), so we wait for a video-rs release. Not reachable in
+    # this crate: video-rs never calls `Url::origin()` / `url::quirks::origin()` and
+    # we only use path-based locations, never `Location::Network`.
+    # Remove once video-rs depends on url >= 2.5.9.
+    "RUSTSEC-2026-0592",
 ]
